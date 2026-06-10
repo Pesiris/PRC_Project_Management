@@ -246,7 +246,7 @@ let syncMsg = "Sincronização desligada";
      Palavra-passe: Gorongosa-5827-zambeze
    ============================================================ */
 const AUTH_SALT = "tc_v1_";
-const AUTH_HASH = "e811a4fafc71eb6063433bb0aed8d38d8d0d75fb4df8f5bfe2ae9155b8349cc6";
+const AUTH_HASH = "8fd8f5b5f7b63e19de6261e85157fa4f74df11db70d06c38fd13cfa560568193";
 async function sha256(txt){
   const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
