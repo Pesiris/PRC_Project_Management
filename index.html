@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trust Capital — Painel de Gestão de Projectos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+:root{
+  --ink:#1a2332; --ink-soft:#475069; --line:#dfe3ec; --line-soft:#eef0f5;
+  --bg:#f6f7f9; --panel:#ffffff; --brand:#1f3a5f; --brand-2:#2d5a8c;
+  --crit:#b3261e; --crit-bg:#fdeceb; --warn:#9a6700; --warn-bg:#fdf5e3;
+  --ok:#1a7f54; --ok-bg:#e7f4ee; --block:#7a3ea8; --block-bg:#f3ebfa;
+  --idle:#5a6478; --idle-bg:#eef0f5;
+  --accent:#c8862e;
+  --r:10px; --r-sm:7px; --sh:0 1px 2px rgba(20,30,50,.06),0 4px 14px rgba(20,30,50,.05);
+  --mono:'SF Mono',ui-monospace,'Cascadia Mono','Roboto Mono',monospace;
+  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap');
+
+/* ---- Topbar ---- */
+.topbar{background:var(--brand);color:#fff;padding:0 22px;height:60px;display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:40}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand b{font-family:'Fraunces',serif;font-weight:600;font-size:19px;letter-spacing:.2px}
+.brand span{font-size:11px;color:#a9c0dc;text-transform:uppercase;letter-spacing:1.5px}
+.tabs{display:flex;gap:2px;margin-left:8px}
+.tab{background:none;border:0;color:#bcd0e6;padding:8px 15px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:.15s}
+.tab:hover{background:rgba(255,255,255,.08);color:#fff}
+.tab.on{background:#fff;color:var(--brand);font-weight:600}
+.topbar .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.scope-tag{font-size:11px;color:#a9c0dc;border:1px solid rgba(255,255,255,.2);padding:3px 9px;border-radius:20px}
+.sync-badge{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;color:#cfe0f0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:5px 11px;border-radius:20px;cursor:pointer;font-family:inherit;transition:.15s}
+.sync-badge:hover{background:rgba(255,255,255,.16)}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:#8aa0b6}
+.sync-off .sync-dot{background:#8aa0b6}
+.sync-ok .sync-dot{background:#3ecf8e;box-shadow:0 0 0 3px rgba(62,207,142,.25)}
+.sync-syncing .sync-dot{background:#f5c451;animation:pulse 1s infinite}
+.sync-error .sync-dot{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.25)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.cloud-steps{counter-reset:step;margin:0 0 4px}
+.cloud-steps li{list-style:none;position:relative;padding:0 0 14px 34px;font-size:13px;color:var(--ink-soft);line-height:1.55}
+.cloud-steps li::before{counter-increment:step;content:counter(step);position:absolute;left:0;top:0;width:23px;height:23px;background:var(--brand);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.cloud-steps li b{color:var(--ink)}
+.cloud-steps a{color:var(--brand-2)}
+.cloud-status{padding:10px 12px;border-radius:8px;font-size:12px;margin-top:6px}
+.cloud-status.ok{background:var(--ok-bg);color:var(--ok)}
+.cloud-status.err{background:var(--crit-bg);color:var(--crit)}
+.cloud-status.info{background:#eef3f8;color:var(--brand-2)}
+
+/* ---- Buttons ---- */
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 14px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:#c2c9d6;background:#fafbfc}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.primary:hover{background:var(--brand-2)}
+.btn.ghost{border-color:transparent;background:rgba(255,255,255,.1);color:#fff}
+.btn.ghost:hover{background:rgba(255,255,255,.18)}
+.btn.danger{color:var(--crit);border-color:#f0c9c6}
+.btn.danger:hover{background:var(--crit-bg)}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn.xs{padding:3px 8px;font-size:11px}
+
+/* ---- Layout ---- */
+.wrap{max-width:1320px;margin:0 auto;padding:22px}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px}
+.page-head h1{font-family:'Fraunces',serif;font-weight:600;font-size:25px;letter-spacing:-.2px}
+.page-head p{color:var(--ink-soft);font-size:13px;margin-top:2px}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh)}
+
+/* ---- KPI cards ---- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;position:relative;overflow:hidden;box-shadow:var(--sh)}
+.kpi .lab{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--ink-soft);font-weight:600}
+.kpi .num{font-size:34px;font-weight:700;font-family:'Fraunces',serif;line-height:1.1;margin-top:6px}
+.kpi .sub{font-size:12px;color:var(--ink-soft);margin-top:3px}
+.kpi .bar{position:absolute;left:0;top:0;bottom:0;width:4px}
+.kpi.c-crit .bar{background:var(--crit)} .kpi.c-crit .num{color:var(--crit)}
+.kpi.c-exec .bar{background:var(--brand-2)} .kpi.c-exec .num{color:var(--brand-2)}
+.kpi.c-ok .bar{background:var(--ok)} .kpi.c-ok .num{color:var(--ok)}
+.kpi.c-warn .bar{background:var(--warn)} .kpi.c-warn .num{color:var(--warn)}
+
+/* ---- Section headers ---- */
+.sec{margin-bottom:22px}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.sec-head h2{font-size:15px;font-weight:600}
+.sec-head .count{background:var(--line-soft);color:var(--ink-soft);font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+
+/* ---- Badges ---- */
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:5px;white-space:nowrap}
+.b-crit{background:var(--crit-bg);color:var(--crit)}
+.b-exec{background:#e8eff6;color:var(--brand-2)}
+.b-ok{background:var(--ok-bg);color:var(--ok)}
+.b-block{background:var(--block-bg);color:var(--block)}
+.b-idle{background:var(--idle-bg);color:var(--idle)}
+.b-late{background:var(--warn-bg);color:var(--warn)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+
+/* ---- Tables ---- */
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--line);background:#fbfcfd}
+td{padding:11px 12px;border-bottom:1px solid var(--line-soft);font-size:13px;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr{transition:.1s}
+tbody tr:hover{background:#fafbfc}
+.t-title{font-weight:600;color:var(--ink)}
+.t-meta{font-size:12px;color:var(--ink-soft)}
+.prio-chip{font-family:var(--mono);font-size:11px;font-weight:700;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:5px;background:var(--line-soft);color:var(--ink)}
+.prio-chip.p1{background:#fde7e6;color:var(--crit)}
+.prio-chip.p2{background:var(--warn-bg);color:var(--warn)}
+
+/* ---- Project grid ---- */
+.proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px}
+.proj-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden;cursor:pointer;transition:.15s}
+.proj-card:hover{border-color:#c2c9d6;transform:translateY(-1px);box-shadow:0 4px 18px rgba(20,30,50,.1)}
+.proj-card .pc-top{padding:14px 16px;border-bottom:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.proj-card h3{font-size:16px;font-weight:600}
+.proj-card .pc-grp{font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.proj-card .pc-body{padding:14px 16px}
+.proj-card .pc-scope{font-size:12px;color:var(--ink-soft);margin-bottom:12px;min-height:32px}
+.progress{height:6px;background:var(--line-soft);border-radius:20px;overflow:hidden}
+.progress i{display:block;height:100%;background:var(--ok);border-radius:20px;transition:.4s}
+.pc-stats{display:flex;justify-content:space-between;margin-top:10px;font-size:11px;color:var(--ink-soft)}
+.pc-foot{padding:10px 16px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--ink-soft);display:flex;justify-content:space-between}
+
+/* ---- Modal ---- */
+.overlay{position:fixed;inset:0;background:rgba(20,30,50,.45);backdrop-filter:blur(2px);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto}
+.modal{background:var(--panel);border-radius:14px;width:100%;max-width:680px;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:pop .18s ease}
+.modal.wide{max-width:920px}
+@keyframes pop{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+.modal-head{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.modal-head h2{font-family:'Fraunces',serif;font-size:20px;font-weight:600}
+.modal-head .x{border:0;background:none;font-size:22px;color:var(--ink-soft);cursor:pointer;line-height:1;padding:4px 8px;border-radius:6px}
+.modal-head .x:hover{background:var(--line-soft)}
+.modal-body{padding:22px}
+.modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;background:#fbfcfd;border-radius:0 0 14px 14px}
+
+/* ---- Forms ---- */
+.field{margin-bottom:15px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);font:inherit;font-size:13px;background:#fff;color:var(--ink)}
+.field input:focus,.field select:focus,.field textarea:focus{outline:0;border-color:var(--brand-2);box-shadow:0 0 0 3px rgba(45,90,140,.12)}
+.field textarea{resize:vertical;min-height:64px}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.frow-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.check input{width:auto}
+
+/* ---- Detail / log ---- */
+.detail-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px}
+.dm{background:#fbfcfd;border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:10px 12px}
+.dm .l{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600}
+.dm .v{font-size:14px;font-weight:600;margin-top:3px}
+.log{border-left:2px solid var(--line);padding-left:16px;margin-top:6px}
+.log-item{position:relative;padding-bottom:14px}
+.log-item::before{content:'';position:absolute;left:-21px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--brand-2);border:2px solid #fff}
+.log-item .when{font-size:11px;color:var(--ink-soft);font-family:var(--mono)}
+.log-item .what{font-size:13px;margin-top:1px}
+.log-empty{color:var(--ink-soft);font-size:13px;font-style:italic}
+
+/* ---- Filters ---- */
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.toolbar input[type=search]{padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-sm);font:inherit;font-size:13px;min-width:220px}
+.toolbar select{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font:inherit;font-size:13px;background:#fff}
+.spacer{flex:1}
+
+.empty-state{text-align:center;padding:60px 20px;color:var(--ink-soft)}
+.empty-state h3{font-size:16px;color:var(--ink);margin-bottom:6px}
+.loading{text-align:center;padding:80px;color:var(--ink-soft)}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:11px 20px;border-radius:8px;font-size:13px;z-index:90;box-shadow:0 8px 24px rgba(0,0,0,.25);animation:pop .2s}
+.inline-edit-row td{background:#fbfcfd}
+
+/* ---- People ---- */
+.people-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.person-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh);padding:16px;cursor:pointer;transition:.15s;display:flex;gap:13px;align-items:flex-start}
+.person-card:hover{border-color:#c2c9d6;transform:translateY(-1px);box-shadow:0 4px 18px rgba(20,30,50,.1)}
+.person-card.inactive{opacity:.6}
+.avatar{width:42px;height:42px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;background:var(--brand-2);font-family:var(--mono)}
+.avatar.lg{width:64px;height:64px;font-size:20px}
+.person-card .pi-name{font-weight:600;font-size:14px}
+.person-card .pi-role{font-size:12px;color:var(--ink-soft);margin-top:1px}
+.person-card .pi-meta{font-size:11px;color:var(--ink-soft);margin-top:7px;display:flex;flex-wrap:wrap;gap:8px}
+.person-head{display:flex;gap:18px;align-items:center;margin-bottom:20px}
+.team-chips{display:flex;flex-wrap:wrap;gap:8px}
+.team-chip{display:inline-flex;align-items:center;gap:7px;background:#fbfcfd;border:1px solid var(--line);border-radius:24px;padding:4px 12px 4px 4px;font-size:12px;font-weight:500;cursor:pointer;transition:.12s}
+.team-chip:hover{border-color:#c2c9d6;background:#fff}
+.team-chip .avatar{width:26px;height:26px;font-size:10px}
+.team-chip.note{cursor:default;color:var(--ink-soft);padding:5px 12px;font-style:italic}
+.team-chip.note:hover{border-color:var(--line);background:#fbfcfd}
+
+@media(max-width:720px){
+  .tabs{display:none}
+  .frow,.frow-3{grid-template-columns:1fr}
+  .wrap{padding:14px}
+}
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">A carregar o painel…</div></div>
+<script>
+/* ============================================================
+   TRUST CAPITAL — Painel de Gestão de Projectos
+   Armazenamento local (localStorage) + sincronização automática
+   na nuvem via Gist privado do GitHub. Funciona em qualquer
+   dispositivo e offline; sincroniza quando há ligação.
+   ============================================================ */
+const SHARED = false;
+const K_PROJ = "tc:projects";
+const K_ACT  = "tc:actions";
+const K_LOG  = "tc:log";
+const K_PPL  = "tc:people";
+const K_CFG  = "tc:cloudcfg";   // {token, gistId} guardado só neste dispositivo
+const K_REV  = "tc:rev";        // carimbo da última gravação (para resolver conflitos)
+const GIST_FILE = "trustcapital_data.json";
+let cloud = { token:"", gistId:"" };   // configuração de nuvem (por dispositivo)
+let syncState = "off";                  // off | ok | syncing | error
+let syncMsg = "Sincronização desligada";
+const STATUS = {
+  nao_iniciado:{label:"Não iniciado",cls:"b-idle"},
+  em_execucao:{label:"Em execução",cls:"b-exec"},
+  bloqueado:{label:"Bloqueado",cls:"b-block"},
+  concluido:{label:"Concluído",cls:"b-ok"},
+};
+const GRUPOS = ["O&G","Industria","Renewable","Fuel","Logistics","Boroma & Lupata","Mining","IT & Financial Services"];
+const ESTADOS_PESSOA = {ativo:"Activo", inativo:"Inactivo"};
+
+/* ---------- SEED PESSOAS (a partir da matriz) ---------- */
+const SEED_PEOPLE = [
+  {id:"u_pr", name:"Paulo Ratilal", initials:"PR", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_eddy", name:"Eddy + Mackie", initials:"Mck", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:"Registo combinado da matriz original — pode separar em duas fichas."},
+  {id:"u_sergio", name:"Sergio", initials:"S", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_jiva", name:"Jivá", initials:"", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_rsg", name:"RSG", initials:"R", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_mucave", name:"Mucave (Moz Indico)", initials:"", role:"", company:"Moz Indico", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_ppr", name:"PPR", initials:"", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_john", name:"John", initials:"", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_jl", name:"Jose Louro", initials:"JL", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_fr", name:"Firoz Rawjee", initials:"FR", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_mzm", name:"Menzi Mbatha", initials:"MzM", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_jg", name:"João Gaspar", initials:"JoãoG", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_marcel", name:"Marcel", initials:"", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_hb", name:"Henrique Bettencourt", initials:"HB", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_iz", name:"Ian Zaqueu", initials:"IZ", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_ap", name:"Antonio Perruci", initials:"AP", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_mt", name:"Miguel Teixeira", initials:"MT", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_st", name:"Steven Taylor", initials:"ST", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+  {id:"u_as", name:"Assane Sidi", initials:"A", role:"", company:"", area:"", email:"", phone:"", status:"ativo", notes:""},
+];
+
+/* ---------- SEED (matriz Outubro 2025) ---------- */
+const SEED_PROJECTS = [
+  {id:"p_paytek",name:"Paytek",grupo:"IT & Financial Services",priority:1,lead:"PR + JL",support:"João G + R / MzM + P",scope:"Bets / Tax / EHer + FPDP",notes:"Prioridade nº1 do Grupo. BNI, Paytek e MCB sob esta vertical."},
+  {id:"p_sbp",name:"SBP",grupo:"Industria",priority:2,lead:"PR + AP",support:"AG + JL / MzM",scope:"Sell + Paddles + O&G",notes:"Mozal Mandate associado."},
+  {id:"p_elecnor",name:"Elecnor",grupo:"Renewable",priority:3,lead:"—",support:"—",scope:"HCB!! + Solar + STE?",notes:""},
+  {id:"p_cdi_tn",name:"CDI / TN",grupo:"Logistics",priority:4,lead:"—",support:"—",scope:"PLT / DryPort + PBeach",notes:"TN Mandate (O&G) relacionado."},
+  {id:"p_fuel",name:"Fuel",grupo:"Fuel",priority:5,lead:"S + PR",support:"A (+Mck?) / JS?",scope:"Concord + bladders + JS",notes:""},
+  {id:"p_africo",name:"Africo",grupo:"Industria",priority:6,lead:"FR + JL",support:"MT / A (+ PR)",scope:"TMT + tech + tanks/WH",notes:""},
+  {id:"p_bl",name:"Boroma & Lupata",grupo:"Boroma & Lupata",priority:7,lead:"—",support:"—",scope:"PPAs + Fund/FC + RSA",notes:""},
+  {id:"p_mining",name:"Mining",grupo:"Mining",priority:8,lead:"PR + R",support:"JL (+Mck?) / (+ IZ?)",scope:"PChina / Ian / DXB + Fund",notes:""},
+  {id:"p_solar",name:"Solar",grupo:"Renewable",priority:9,lead:"PR (+Mck)",support:"JS + NQ (+SR)",scope:"HCB? + Pipeline + Nacala",notes:""},
+];
+const SEED_ACTIONS = [
+  {id:"a1",projectId:"p_paytek",title:"MziM — bets BP / proposal",ownerId:"u_mzm",supportIds:[],status:"em_execucao",critico:true,priority:1,deadline:"",beginDate:"",notes:"Next step 1a"},
+  {id:"a2",projectId:"p_paytek",title:"JL+R — presentation to S",ownerId:"u_jl",supportIds:["u_rsg"],status:"em_execucao",critico:true,priority:1,deadline:"",beginDate:"",notes:"Next step 1b"},
+  {id:"a3",projectId:"p_paytek",title:"JL+Y — joining content",ownerId:"u_jl",supportIds:[],status:"em_execucao",critico:false,priority:2,deadline:"",beginDate:"",notes:"Next step 1c"},
+  {id:"a4",projectId:"p_paytek",title:"BNI — milestone",ownerId:"",supportIds:[],status:"em_execucao",critico:false,priority:1,deadline:"",beginDate:"",notes:"BNI"},
+  {id:"a5",projectId:"p_paytek",title:"MCB — milestone",ownerId:"",supportIds:[],status:"em_execucao",critico:false,priority:2,deadline:"",beginDate:"",notes:"MCB"},
+  {id:"a6",projectId:"p_sbp",title:"SBP — acção a definir (a)",ownerId:"",supportIds:[],status:"nao_iniciado",critico:false,priority:2,deadline:"",beginDate:"",notes:"Next step 2a"},
+  {id:"a7",projectId:"p_sbp",title:"SBP — acção a definir (b)",ownerId:"",supportIds:[],status:"nao_iniciado",critico:false,priority:2,deadline:"",beginDate:"",notes:"Next step 2b"},
+  {id:"a8",projectId:"p_cdi_tn",title:"TN Mandate",ownerId:"",supportIds:[],status:"em_execucao",critico:false,priority:1,deadline:"",beginDate:"",notes:"O&G"},
+  {id:"a9",projectId:"p_sbp",title:"Mozal Mandate",ownerId:"",supportIds:[],status:"em_execucao",critico:false,priority:1,deadline:"",beginDate:"",notes:"Industria"},
+  {id:"a10",projectId:"p_fuel",title:"Concord / bladders — milestone",ownerId:"",supportIds:[],status:"em_execucao",critico:false,priority:1,deadline:"",beginDate:"",notes:""},
+  {id:"a11",projectId:"p_bl",title:"PPAs + Fund/FC",ownerId:"",supportIds:[],status:"em_execucao",critico:false,priority:1,deadline:"",beginDate:"",notes:""},
+  {id:"a12",projectId:"p_mining",title:"PChina / Ian / DXB + Fund",ownerId:"u_iz",supportIds:[],status:"em_execucao",critico:false,priority:1,deadline:"",beginDate:"",notes:""},
+];
+
+/* ---------- STATE ---------- */
+let projects=[], actions=[], logEntries=[], people=[], view="dashboard", openProjectId=null, openPersonId=null;
+
+/* ---------- STORAGE (local, via localStorage) ---------- */
+function safeGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function safeSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+
+async function loadAll(){
+  // 1) Carrega config de nuvem deste dispositivo
+  try{ const c=safeGet(K_CFG); if(c) cloud=JSON.parse(c); }catch(e){}
+  // 2) Carrega o que houver localmente
+  loadLocal();
+  // 3) Se houver nuvem configurada, tenta puxar a versão mais recente
+  if(cloud.token && cloud.gistId){
+    await cloudPull(true);
+  } else {
+    syncState="off"; syncMsg="Sincronização desligada";
+  }
+}
+function loadLocal(){
+  try{
+    const p = safeGet(K_PROJ);
+    if(p){
+      projects=JSON.parse(p); actions=JSON.parse(safeGet(K_ACT)||"[]"); logEntries=JSON.parse(safeGet(K_LOG)||"[]");
+      const pp = safeGet(K_PPL);
+      people = pp ? JSON.parse(pp) : SEED_PEOPLE.slice();
+      migrateActions(); migrateProjects();
+      if(!pp) persistLocal();
+    }
+    else { projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[];
+      migrateProjects();
+      logEntries.push({ts:new Date().toISOString(),entity:"Sistema",what:"Importação inicial da matriz de Outubro 2025 ("+projects.length+" projectos, "+actions.length+" acções, "+people.length+" pessoas).",refId:""});
+      persistLocal(); }
+  }catch(e){ projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[]; migrateProjects(); }
+}
+// Resolve uma pessoa a partir de um token de texto (iniciais ou nome)
+function personByToken(tok){
+  tok=(tok||"").trim(); if(!tok||tok==="—") return null;
+  let m=people.find(u=>u.initials && u.initials.toLowerCase()===tok.toLowerCase());
+  if(m) return m;
+  m=people.find(u=>u.name.toLowerCase()===tok.toLowerCase());
+  if(m) return m;
+  return people.find(u=>u.name.toLowerCase().startsWith(tok.toLowerCase())) || null;
+}
+// Converte dados antigos (owner/support em texto) para ownerId/supportIds
+function migrateActions(){
+  let changed=false;
+  actions.forEach(a=>{
+    if(a.ownerId===undefined){
+      const m=people.find(u=>u.name===a.owner); a.ownerId=m?m.id:""; changed=true; delete a.owner;
+    }
+    if(a.supportIds===undefined){
+      const m=people.find(u=>u.name===a.support); a.supportIds=m?[m.id]:[]; changed=true; delete a.support;
+    }
+  });
+  return changed;
+}
+// Converte lead/support de texto para leadId + memberIds, preservando só o texto não reconhecido
+function migrateProjects(){
+  let changed=false;
+  projects.forEach(p=>{
+    if(p.leadId===undefined){
+      changed=true;
+      const ids=[]; const unmatched=[];
+      const consume=str=>String(str||"").split(/[+\/,]/).map(t=>t.replace(/[()?]/g,"").trim()).filter(t=>t&&t!=="—")
+        .forEach(t=>{ const u=personByToken(t); if(u){ if(!ids.includes(u.id)) ids.push(u.id);} else if(!unmatched.includes(t)) unmatched.push(t); });
+      consume(p.lead); consume(p.support);
+      p.leadId = ids[0]||"";
+      p.memberIds = ids.slice(1);
+      p.teamNote = unmatched.join(", ");
+      delete p.lead; delete p.support;
+    }
+  });
+  return changed;
+}
+
+/* ---------- PERSISTÊNCIA (local + nuvem) ---------- */
+function persistLocal(){
+  safeSet(K_PROJ,JSON.stringify(projects));
+  safeSet(K_ACT,JSON.stringify(actions));
+  safeSet(K_PPL,JSON.stringify(people));
+  safeSet(K_LOG,JSON.stringify(logEntries.slice(-500)));
+}
+// Grava localmente e, se houver nuvem, empurra para o Gist (com debounce)
+let pushTimer=null;
+function persist(){
+  const rev=Date.now(); safeSet(K_REV,String(rev));
+  persistLocal();
+  if(cloud.token && cloud.gistId){
+    clearTimeout(pushTimer);
+    pushTimer=setTimeout(()=>cloudPush(rev), 1200); // agrupa gravações próximas
+  }
+}
+async function pushLog(entity,what,refId){
+  logEntries.push({ts:new Date().toISOString(),entity,what,refId});
+}
+
+/* ---------- SINCRONIZAÇÃO COM GIST ---------- */
+function snapshot(){
+  return { rev:Number(safeGet(K_REV)||0), projects, actions, people, logEntries:logEntries.slice(-500) };
+}
+function applySnapshot(d){
+  projects = d.projects||[]; actions = d.actions||[]; people = d.people||[]; logEntries = d.logEntries||[];
+  migrateActions(); migrateProjects(); persistLocal();
+}
+function setSync(state,msg){ syncState=state; syncMsg=msg; updateSyncBadge(); }
+
+async function cloudPull(initial){
+  if(!cloud.token||!cloud.gistId){ setSync("off","Sincronização desligada"); return; }
+  setSync("syncing","A obter da nuvem…");
+  try{
+    const r=await fetch("https://api.github.com/gists/"+cloud.gistId,{
+      headers:{ "Authorization":"Bearer "+cloud.token, "Accept":"application/vnd.github+json" }
+    });
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const g=await r.json();
+    const f=g.files && g.files[GIST_FILE];
+    if(f && f.content){
+      const remote=JSON.parse(f.content);
+      const localRev=Number(safeGet(K_REV)||0);
+      const remoteRev=Number(remote.rev||0);
+      // A versão mais recente (maior rev) ganha
+      if(remoteRev>=localRev){ applySnapshot(remote); setSync("ok","Sincronizado (nuvem mais recente)"); if(!initial) render(); }
+      else { setSync("ok","Sincronizado (local mais recente)"); await cloudPush(localRev); }
+    } else {
+      // Gist existe mas sem o ficheiro: envia o local
+      await cloudPush(Number(safeGet(K_REV)||Date.now()));
+    }
+  }catch(e){ setSync("error","Erro ao sincronizar: "+e.message); }
+}
+async function cloudPush(rev){
+  if(!cloud.token||!cloud.gistId){ return; }
+  setSync("syncing","A guardar na nuvem…");
+  try{
+    const body={ files:{ [GIST_FILE]:{ content:JSON.stringify(Object.assign(snapshot(),{rev})) } } };
+    const r=await fetch("https://api.github.com/gists/"+cloud.gistId,{
+      method:"PATCH",
+      headers:{ "Authorization":"Bearer "+cloud.token, "Accept":"application/vnd.github+json", "Content-Type":"application/json" },
+      body:JSON.stringify(body)
+    });
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    setSync("ok","Sincronizado · "+new Date().toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'}));
+  }catch(e){ setSync("error","Erro ao guardar: "+e.message); }
+}
+// Cria um Gist novo a partir do estado actual e guarda o id
+async function cloudCreateGist(token){
+  const body={ description:"Trust Capital — dados do painel (privado)", public:false,
+    files:{ [GIST_FILE]:{ content:JSON.stringify(Object.assign(snapshot(),{rev:Date.now()})) } } };
+  const r=await fetch("https://api.github.com/gists",{
+    method:"POST",
+    headers:{ "Authorization":"Bearer "+token, "Accept":"application/vnd.github+json", "Content-Type":"application/json" },
+    body:JSON.stringify(body)
+  });
+  if(!r.ok) throw new Error("HTTP "+r.status+" — verifique o token e a permissão 'gist'");
+  const g=await r.json();
+  return g.id;
+}
+
+/* ---------- DERIVED ---------- */
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function isLate(a){ return a.deadline && a.status!=="concluido" && a.deadline < todayISO(); }
+function projActions(pid){ return actions.filter(a=>a.projectId===pid); }
+function projProgress(pid){ const as=projActions(pid); if(!as.length) return 0; return Math.round(as.filter(a=>a.status==="concluido").length/as.length*100); }
+function projName(pid){ const p=projects.find(x=>x.id===pid); return p?p.name:"—"; }
+function uid(pre){ return pre+Math.random().toString(36).slice(2,8)+Date.now().toString(36).slice(-3); }
+function person(id){ return people.find(u=>u.id===id)||null; }
+function personName(id){ const u=person(id); return u?u.name:""; }
+function personActions(uid){ return actions.filter(a=>a.ownerId===uid || (a.supportIds||[]).includes(uid)); }
+function activePeople(){ return people.filter(u=>u.status==="ativo").sort((a,b)=>a.name.localeCompare(b.name)); }
+function projLeadName(p){ return personName(p.leadId)||""; }
+function projMemberNames(p){ return (p.memberIds||[]).map(personName).filter(Boolean); }
+function projTeamText(p){ const names=projMemberNames(p); const extra=p.teamNote?[p.teamNote]:[]; return names.concat(extra).join(", "); }
+
+/* ---------- HELPERS ---------- */
+const esc=s=>(s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function statusBadge(a){
+  const s=STATUS[a.status]; let html=`<span class="badge ${s.cls}"><span class="dot" style="background:currentColor"></span>${s.label}</span>`;
+  if(isLate(a)) html+=` <span class="badge b-late">Atrasada</span>`;
+  if(a.critico && a.status!=="concluido") html+=` <span class="badge b-crit">Crítica</span>`;
+  return html;
+}
+let toastT;
+function toast(msg){ const el=document.createElement("div"); el.className="toast"; el.textContent=msg; document.body.appendChild(el); clearTimeout(toastT); toastT=setTimeout(()=>el.remove(),2600); }
+function ownerName(a){ return personName(a.ownerId)||""; }
+function supportNames(a){ return (a.supportIds||[]).map(personName).filter(Boolean).join(", "); }
+function ownerSupportText(a){ const o=ownerName(a), s=supportNames(a); return o+(s?(o?" · apoio: ":"apoio: ")+s:""); }
+
+/* ---------- RENDER ROUTER ---------- */
+function render(){
+  const app=document.getElementById("app");
+  app.innerHTML = topbar() + `<div class="wrap">${
+    view==="dashboard"?renderDashboard():
+    view==="projects"?(openProjectId?renderProjectDetail(openProjectId):renderProjects()):
+    view==="actions"?renderActions():
+    view==="people"?(openPersonId?renderPersonDetail(openPersonId):renderPeople()):
+    view==="log"?renderLog():
+    view==="reports"?renderReports():""
+  }</div>`;
+  bindGlobal();
+}
+function topbar(){
+  const t=(id,lab)=>`<button class="tab ${view===id&&!openProjectId&&!openPersonId?'on':''}" data-nav="${id}">${lab}</button>`;
+  return `<div class="topbar">
+    <div class="brand"><b>Trust Capital</b><span>Action Plan</span></div>
+    <div class="tabs">
+      ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${t("log","Histórico")}${t("reports","Reports")}
+    </div>
+    <div class="right">
+      <button class="sync-badge sync-${syncState}" data-act="cloud-settings" title="${esc(syncMsg)}"><span class="sync-dot"></span><span id="sync-label">${syncLabel()}</span></button>
+      <button class="btn ghost sm" data-act="new-person">+ Pessoa</button>
+      <button class="btn ghost sm" data-act="new-action">+ Acção</button>
+    </div>
+  </div>`;
+}
+function syncLabel(){
+  return syncState==="off"?"Nuvem: desligada":syncState==="ok"?"Sincronizado":syncState==="syncing"?"A sincronizar…":"Erro de sync";
+}
+function updateSyncBadge(){
+  const b=document.querySelector(".sync-badge"); if(!b) return;
+  b.className="sync-badge sync-"+syncState; b.title=syncMsg;
+  const l=document.getElementById("sync-label"); if(l) l.textContent=syncLabel();
+}
+
+
+/* ================= DASHBOARD ================= */
+function renderDashboard(){
+  const open = actions.filter(a=>a.status!=="concluido");
+  const crit = open.filter(a=>a.critico);
+  const late = open.filter(a=>isLate(a));
+  const exec = actions.filter(a=>a.status==="em_execucao");
+  const blocked = actions.filter(a=>a.status==="bloqueado");
+  const done = actions.filter(a=>a.status==="concluido");
+  const sortP = arr => arr.slice().sort((a,b)=>(a.priority||9)-(b.priority||9) || (a.deadline||"z").localeCompare(b.deadline||"z"));
+
+  const actRow = a => `<tr data-open-action="${a.id}" style="cursor:pointer">
+    <td><span class="prio-chip p${a.priority||''}">${a.priority||'–'}</span></td>
+    <td><div class="t-title">${esc(a.title)}</div><div class="t-meta">${esc(projName(a.projectId))}${ownerName(a)?' · '+esc(ownerName(a)):''}</div></td>
+    <td>${statusBadge(a)}</td>
+    <td class="t-meta">${a.deadline?esc(a.deadline):'—'}</td>
+  </tr>`;
+
+  const section = (title,arr,empty) => `<div class="sec"><div class="sec-head"><h2>${title}</h2><span class="count">${arr.length}</span></div>
+    <div class="panel">${arr.length?`<table><thead><tr><th style="width:48px">Pri</th><th>Acção</th><th style="width:230px">Estado</th><th style="width:120px">Prazo</th></tr></thead><tbody>${arr.map(actRow).join("")}</tbody></table>`:`<div class="empty-state"><p>${empty}</p></div>`}</div></div>`;
+
+  return `<div class="page-head"><div><h1>Dashboard</h1><p>Visão executiva do plano de acção do Grupo · ${todayISO()}</p></div>
+    <div><button class="btn primary" data-nav="reports">Gerar report para Board</button></div></div>
+  <div class="kpis">
+    <div class="kpi c-crit"><div class="bar"></div><div class="lab">Pendentes críticos</div><div class="num">${crit.length}</div><div class="sub">acções marcadas como críticas em aberto</div></div>
+    <div class="kpi c-warn"><div class="bar"></div><div class="lab">Atrasadas</div><div class="num">${late.length}</div><div class="sub">prazo ultrapassado, não concluídas</div></div>
+    <div class="kpi c-exec"><div class="bar"></div><div class="lab">Em execução</div><div class="num">${exec.length}</div><div class="sub">${blocked.length} bloqueada(s)</div></div>
+    <div class="kpi c-ok"><div class="bar"></div><div class="lab">Concluídas</div><div class="num">${done.length}</div><div class="sub">de ${actions.length} acções no total</div></div>
+  </div>
+  ${section("Pendentes críticos", sortP(crit), "Sem críticos em aberto. Bom sinal.")}
+  ${section("Em execução", sortP(exec), "Nenhuma acção em execução.")}
+  ${blocked.length?section("Bloqueadas", sortP(blocked), ""):""}
+  ${section("Terminadas recentemente", done.slice(-6).reverse(), "Ainda nenhuma acção concluída.")}`;
+}
+
+/* ================= PROJECTS GRID ================= */
+function renderProjects(){
+  const cards = projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).map(p=>{
+    const as=projActions(p.id), prog=projProgress(p.id);
+    const crit=as.filter(a=>a.critico&&a.status!=="concluido").length;
+    const late=as.filter(a=>isLate(a)).length;
+    return `<div class="proj-card" data-open-project="${p.id}">
+      <div class="pc-top"><div><h3>${esc(p.name)}</h3><div class="pc-grp">${esc(p.grupo)}</div></div>
+        <span class="prio-chip p${p.priority<=2?p.priority:''}">${p.priority||'–'}</span></div>
+      <div class="pc-body">
+        <div class="pc-scope">${esc(p.scope||"—")}</div>
+        <div class="progress"><i style="width:${prog}%"></i></div>
+        <div class="pc-stats"><span>${prog}% concluído</span><span>${as.length} acções</span></div>
+      </div>
+      <div class="pc-foot"><span>${crit?`<span class="badge b-crit">${crit} crítica(s)</span>`:'Lead: '+esc(projLeadName(p)||'—')}</span>${late?`<span class="badge b-late">${late} atrasada(s)</span>`:''}</div>
+    </div>`;
+  }).join("");
+  return `<div class="page-head"><div><h1>Projectos</h1><p>${projects.length} projectos ordenados por prioridade do Grupo</p></div>
+    <button class="btn primary" data-act="new-project">+ Novo projecto</button></div>
+  <div class="proj-grid">${cards||'<div class="empty-state"><h3>Sem projectos</h3><p>Crie o primeiro projecto para começar.</p></div>'}</div>`;
+}
+
+/* ================= PROJECT DETAIL + LOG ================= */
+function renderProjectDetail(pid){
+  const p=projects.find(x=>x.id===pid); if(!p){view="projects";openProjectId=null;return renderProjects();}
+  const as=projActions(pid), prog=projProgress(pid);
+  const log=logEntries.filter(l=>l.refId===pid||as.some(a=>a.id===l.refId)).slice().reverse();
+  const aRow=a=>`<tr data-open-action="${a.id}" style="cursor:pointer">
+    <td><span class="prio-chip p${a.priority||''}">${a.priority||'–'}</span></td>
+    <td><div class="t-title">${esc(a.title)}</div>${a.notes?`<div class="t-meta">${esc(a.notes)}</div>`:''}</td>
+    <td class="t-meta">${esc(ownerName(a)||'—')}</td>
+    <td>${statusBadge(a)}</td>
+    <td class="t-meta">${a.deadline||'—'}</td>
+    <td><button class="btn xs" data-edit-action="${a.id}" onclick="event.stopPropagation()">Editar</button></td>
+  </tr>`;
+  return `<div class="page-head"><div>
+      <p style="margin-bottom:4px"><a href="#" data-nav="projects" style="color:var(--brand-2);text-decoration:none;font-size:13px">← Projectos</a></p>
+      <h1>${esc(p.name)}</h1><p>${esc(p.grupo)} · prioridade ${p.priority||'—'}</p></div>
+    <div style="display:flex;gap:8px"><button class="btn" data-edit-project="${p.id}">Editar projecto</button>
+      <button class="btn primary" data-act="new-action" data-for="${p.id}">+ Acção</button></div></div>
+  <div class="detail-meta">
+    <div class="dm"><div class="l">Lead</div><div class="v">${p.leadId?`<a href="#" data-open-person="${p.leadId}" style="color:var(--brand-2);text-decoration:none">${esc(projLeadName(p))}</a>`:'—'}</div></div>
+    <div class="dm"><div class="l">Equipa</div><div class="v" style="font-size:13px">${projMemberNames(p).length||p.teamNote?esc(projTeamText(p)):'—'}</div></div>
+    <div class="dm"><div class="l">Progresso</div><div class="v">${prog}%</div></div>
+    <div class="dm"><div class="l">Acções</div><div class="v">${as.length}</div></div>
+  </div>
+  ${(p.leadId||projMemberNames(p).length)?`<div class="panel" style="padding:14px 16px;margin-bottom:22px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:8px">Equipa do projecto</div><div class="team-chips">${
+      (p.leadId?[{id:p.leadId,lead:true}]:[]).concat(projMemberNames(p).map((_,i)=>({id:p.memberIds[i],lead:false}))).map(m=>{const u=person(m.id);return u?`<span class="team-chip" data-open-person="${u.id}">${avatarHtml(u)}<span>${esc(u.name)}${m.lead?' · Lead':''}</span></span>`:'';}).join("")
+    }${p.teamNote?`<span class="team-chip note">${esc(p.teamNote)}</span>`:''}</div></div>`:''}
+  ${p.scope||p.notes?`<div class="panel" style="padding:16px;margin-bottom:22px"><div class="t-meta" style="margin-bottom:4px"><b>Âmbito:</b> ${esc(p.scope||'—')}</div>${p.notes?`<div class="t-meta"><b>Notas:</b> ${esc(p.notes)}</div>`:''}</div>`:''}
+  <div class="sec"><div class="sec-head"><h2>Acções</h2><span class="count">${as.length}</span></div>
+    <div class="panel">${as.length?`<table><thead><tr><th style="width:48px">Pri</th><th>Acção</th><th>Responsável</th><th style="width:220px">Estado</th><th>Prazo</th><th></th></tr></thead><tbody>${as.map(aRow).join("")}</tbody></table>`:`<div class="empty-state"><p>Sem acções neste projecto. Adicione a primeira.</p></div>`}</div></div>
+  <div class="sec"><div class="sec-head"><h2>Histórico do projecto</h2><span class="count">${log.length}</span></div>
+    <div class="panel" style="padding:18px 22px"><div class="log">${log.length?log.map(l=>`<div class="log-item"><div class="when">${fmtTs(l.ts)} · ${esc(l.entity)}</div><div class="what">${esc(l.what)}</div></div>`).join(""):'<div class="log-empty">Sem registos ainda.</div>'}</div></div></div>`;
+}
+function fmtTs(ts){ const d=new Date(ts); return d.toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+
+/* ================= ALL ACTIONS ================= */
+function renderActions(){
+  return `<div class="page-head"><div><h1>Acções</h1><p>Todas as acções de todos os projectos</p></div>
+    <button class="btn primary" data-act="new-action">+ Nova acção</button></div>
+  <div class="toolbar">
+    <input type="search" id="f-search" placeholder="Procurar acção…" oninput="applyActionFilters()">
+    <select id="f-status" onchange="applyActionFilters()"><option value="">Todos os estados</option>${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("")}</select>
+    <select id="f-proj" onchange="applyActionFilters()"><option value="">Todos os projectos</option>${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+    <label class="check" style="margin-left:6px"><input type="checkbox" id="f-crit" onchange="applyActionFilters()"> Só críticas</label>
+    <label class="check"><input type="checkbox" id="f-late" onchange="applyActionFilters()"> Só atrasadas</label>
+  </div>
+  <div class="panel"><table><thead><tr><th style="width:48px">Pri</th><th>Acção</th><th>Projecto</th><th>Responsável</th><th style="width:210px">Estado</th><th>Prazo</th><th></th></tr></thead><tbody id="act-tbody">${actionRows(actions)}</tbody></table></div>`;
+}
+function actionRows(arr){
+  if(!arr.length) return `<tr><td colspan="7"><div class="empty-state" style="padding:40px"><p>Nenhuma acção corresponde aos filtros.</p></div></td></tr>`;
+  return arr.slice().sort((a,b)=>(a.priority||9)-(b.priority||9)).map(a=>`<tr>
+    <td><span class="prio-chip p${a.priority||''}">${a.priority||'–'}</span></td>
+    <td><div class="t-title">${esc(a.title)}</div>${a.notes?`<div class="t-meta">${esc(a.notes)}</div>`:''}</td>
+    <td class="t-meta">${esc(projName(a.projectId))}</td>
+    <td class="t-meta">${esc(ownerName(a)||'—')}</td>
+    <td>${statusBadge(a)}</td>
+    <td class="t-meta">${a.deadline||'—'}</td>
+    <td><button class="btn xs" data-edit-action="${a.id}">Editar</button></td>
+  </tr>`).join("");
+}
+function applyActionFilters(){
+  const q=(document.getElementById("f-search").value||"").toLowerCase();
+  const st=document.getElementById("f-status").value;
+  const pj=document.getElementById("f-proj").value;
+  const cr=document.getElementById("f-crit").checked;
+  const lt=document.getElementById("f-late").checked;
+  let arr=actions.filter(a=>(!q||a.title.toLowerCase().includes(q)||ownerName(a).toLowerCase().includes(q))
+    &&(!st||a.status===st)&&(!pj||a.projectId===pj)&&(!cr||a.critico)&&(!lt||isLate(a)));
+  document.getElementById("act-tbody").innerHTML=actionRows(arr);
+  bindRowClicks();
+}
+
+/* ================= LOG ================= */
+function renderLog(){
+  const log=logEntries.slice().reverse();
+  return `<div class="page-head"><div><h1>Histórico</h1><p>Registo completo de alterações · ${log.length} entradas</p></div></div>
+  <div class="panel" style="padding:20px 24px"><div class="log">${log.length?log.map(l=>`<div class="log-item"><div class="when">${fmtTs(l.ts)} · ${esc(l.entity)}</div><div class="what">${esc(l.what)}</div></div>`).join(""):'<div class="log-empty">Sem registos.</div>'}</div></div>`;
+}
+
+/* ================= REPORTS ================= */
+function renderReports(){
+  const open=actions.filter(a=>a.status!=="concluido");
+  return `<div class="page-head"><div><h1>Reports para Board</h1><p>Gere um snapshot do estado actual para discussão</p></div></div>
+  <div class="kpis">
+    <div class="kpi c-crit"><div class="bar"></div><div class="lab">Críticos abertos</div><div class="num">${open.filter(a=>a.critico).length}</div></div>
+    <div class="kpi c-warn"><div class="bar"></div><div class="lab">Atrasadas</div><div class="num">${open.filter(isLate).length}</div></div>
+    <div class="kpi c-exec"><div class="bar"></div><div class="lab">Projectos activos</div><div class="num">${projects.length}</div></div>
+    <div class="kpi c-ok"><div class="bar"></div><div class="lab">Acções concluídas</div><div class="num">${actions.filter(a=>a.status==="concluido").length}</div></div>
+  </div>
+  <div class="panel" style="padding:24px;display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+    <div style="flex:1;min-width:240px"><h2 style="font-family:'Fraunces',serif;font-size:18px;margin-bottom:6px">Folha Excel</h2>
+      <p class="t-meta">Workbook com resumo executivo, um separador por projecto, lista completa de acções e o histórico. Editável.</p></div>
+    <button class="btn primary" data-act="export-xlsx">Descarregar Excel (.xlsx)</button>
+  </div>
+  <div class="panel" style="padding:24px;margin-top:14px;display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+    <div style="flex:1;min-width:240px"><h2 style="font-family:'Fraunces',serif;font-size:18px;margin-bottom:6px">PDF executivo</h2>
+      <p class="t-meta">Snapshot apresentável: indicadores de topo, pendentes críticos, atrasados e estado por projecto. Pronto para distribuir.</p></div>
+    <button class="btn primary" data-act="export-pdf">Descarregar PDF</button>
+  </div>`;
+}
+
+
+/* ================= PESSOAS ================= */
+function avatarHtml(u,lg){
+  const palette=["#2d5a8c","#1a7f54","#9a6700","#7a3ea8","#b3261e","#1f3a5f","#0f766e","#5a6478"];
+  const idx=(u.name.charCodeAt(0)||0)%palette.length;
+  const ini=u.initials || (u.name.split(/\s+/).map(w=>w[0]).slice(0,2).join("").toUpperCase());
+  return `<div class="avatar ${lg?'lg':''}" style="background:${palette[idx]}">${esc(ini||"?")}</div>`;
+}
+function renderPeople(){
+  const sorted=people.slice().sort((a,b)=>(a.status===b.status?0:a.status==="ativo"?-1:1)||0).sort((a,b)=>a.name.localeCompare(b.name));
+  const active=people.filter(u=>u.status==="ativo").length;
+  const cards=sorted.map(u=>{
+    const load=personActions(u.id).filter(a=>a.status!=="concluido").length;
+    const projN=projects.filter(p=>p.leadId===u.id||(p.memberIds||[]).includes(u.id)).length;
+    return `<div class="person-card ${u.status==='ativo'?'':'inactive'}" data-open-person="${u.id}">
+      ${avatarHtml(u)}
+      <div style="flex:1;min-width:0">
+        <div class="pi-name">${esc(u.name)} ${u.status==='inativo'?'<span class="badge b-idle">Inactivo</span>':''}</div>
+        <div class="pi-role">${esc(u.role||'Função por definir')}</div>
+        <div class="pi-meta">${u.company?`<span>🏢 ${esc(u.company)}</span>`:''}${u.area?`<span>${esc(u.area)}</span>`:''}<span>${projN} projecto(s)</span><span>${load} acção(ões) activa(s)</span></div>
+      </div></div>`;
+  }).join("");
+  return `<div class="page-head"><div><h1>Pessoas</h1><p>${people.length} fichas · ${active} activas</p></div>
+    <button class="btn primary" data-act="new-person">+ Nova pessoa</button></div>
+  <div class="people-grid">${cards||'<div class="empty-state"><h3>Sem pessoas</h3><p>Crie a primeira ficha de trabalhador.</p></div>'}</div>`;
+}
+function renderPersonDetail(uid){
+  const u=person(uid); if(!u){view="people";openPersonId=null;return renderPeople();}
+  const owned=actions.filter(a=>a.ownerId===uid);
+  const supp=actions.filter(a=>(a.supportIds||[]).includes(uid));
+  const log=logEntries.filter(l=>l.refId===uid).slice().reverse();
+  const aRow=a=>`<tr data-open-action="${a.id}" style="cursor:pointer">
+    <td><span class="prio-chip p${a.priority||''}">${a.priority||'–'}</span></td>
+    <td><div class="t-title">${esc(a.title)}</div><div class="t-meta">${esc(projName(a.projectId))}</div></td>
+    <td>${statusBadge(a)}</td><td class="t-meta">${a.deadline||'—'}</td></tr>`;
+  const tbl=(arr,empty)=>arr.length?`<table><thead><tr><th style="width:48px">Pri</th><th>Acção</th><th style="width:220px">Estado</th><th>Prazo</th></tr></thead><tbody>${arr.map(aRow).join("")}</tbody></table>`:`<div class="empty-state"><p>${empty}</p></div>`;
+  return `<div class="page-head"><div>
+      <p style="margin-bottom:4px"><a href="#" data-nav="people" style="color:var(--brand-2);text-decoration:none;font-size:13px">← Pessoas</a></p>
+    </div><button class="btn" data-edit-person="${u.id}">Editar ficha</button></div>
+  <div class="person-head">${avatarHtml(u,true)}
+    <div><h1 style="font-family:'Fraunces',serif;font-size:26px">${esc(u.name)} ${u.status==='inativo'?'<span class="badge b-idle">Inactivo</span>':''}</h1>
+      <p style="color:var(--ink-soft)">${esc(u.role||'Função por definir')}${u.company?' · '+esc(u.company):''}</p></div></div>
+  <div class="detail-meta">
+    <div class="dm"><div class="l">Iniciais</div><div class="v">${esc(u.initials||'—')}</div></div>
+    <div class="dm"><div class="l">Área / especialidade</div><div class="v">${esc(u.area||'—')}</div></div>
+    <div class="dm"><div class="l">Email</div><div class="v" style="font-size:13px">${u.email?`<a href="mailto:${esc(u.email)}">${esc(u.email)}</a>`:'—'}</div></div>
+    <div class="dm"><div class="l">Telefone</div><div class="v" style="font-size:13px">${esc(u.phone||'—')}</div></div>
+  </div>
+  ${u.notes?`<div class="panel" style="padding:16px;margin-bottom:22px"><div class="t-meta"><b>Notas:</b> ${esc(u.notes)}</div></div>`:''}
+  ${(()=>{ const led=projects.filter(p=>p.leadId===uid); const mem=projects.filter(p=>(p.memberIds||[]).includes(uid));
+    if(!led.length && !mem.length) return '';
+    const chip=(p,role)=>`<span class="team-chip" data-open-project="${p.id}"><span class="prio-chip p${p.priority<=2?p.priority:''}" style="width:20px;height:20px;font-size:10px">${p.priority||'–'}</span><span>${esc(p.name)} · ${role}</span></span>`;
+    return `<div class="sec"><div class="sec-head"><h2>Projectos</h2><span class="count">${led.length+mem.length}</span></div>
+      <div class="panel" style="padding:14px 16px"><div class="team-chips">${led.map(p=>chip(p,'Lead')).join("")}${mem.map(p=>chip(p,'Equipa')).join("")}</div></div></div>`;
+  })()}
+  <div class="sec"><div class="sec-head"><h2>Responsável por</h2><span class="count">${owned.length}</span></div><div class="panel">${tbl(owned,"Sem acções como responsável.")}</div></div>
+  <div class="sec"><div class="sec-head"><h2>Apoio em</h2><span class="count">${supp.length}</span></div><div class="panel">${tbl(supp,"Sem acções de apoio.")}</div></div>
+  <div class="sec"><div class="sec-head"><h2>Histórico da ficha</h2><span class="count">${log.length}</span></div>
+    <div class="panel" style="padding:18px 22px"><div class="log">${log.length?log.map(l=>`<div class="log-item"><div class="when">${fmtTs(l.ts)} · ${esc(l.entity)}</div><div class="what">${esc(l.what)}</div></div>`).join(""):'<div class="log-empty">Sem registos.</div>'}</div></div></div>`;
+}
+
+/* ================= MODAL: PESSOA ================= */
+function personModal(u){
+  const isEdit=!!u; u=u||{status:"ativo"};
+  showModal(`${isEdit?"Editar ficha":"Nova ficha de trabalhador"}`,`
+    <div class="frow">
+      <div class="field"><label>Nome completo</label><input id="mp-name" value="${esc(u.name||'')}" placeholder="Ex.: Paulo Ratilal"></div>
+      <div class="field"><label>Iniciais / alcunha</label><input id="mp-initials" value="${esc(u.initials||'')}" placeholder="Ex.: PR"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Função / cargo</label><input id="mp-role" value="${esc(u.role||'')}" placeholder="Ex.: Director Financeiro"></div>
+      <div class="field"><label>Empresa / entidade do Grupo</label><input id="mp-company" value="${esc(u.company||'')}" placeholder="Ex.: Trust Capital"></div>
+    </div>
+    <div class="field"><label>Área / especialidade</label><input id="mp-area" value="${esc(u.area||'')}" placeholder="Ex.: O&G, Renováveis, Jurídico"></div>
+    <div class="frow">
+      <div class="field"><label>Email</label><input id="mp-email" type="email" value="${esc(u.email||'')}" placeholder="nome@empresa.co.mz"></div>
+      <div class="field"><label>Telefone</label><input id="mp-phone" value="${esc(u.phone||'')}" placeholder="+258 ..."></div>
+    </div>
+    <div class="field"><label>Estado</label><select id="mp-status"><option value="ativo" ${u.status==='ativo'?'selected':''}>Activo</option><option value="inativo" ${u.status==='inativo'?'selected':''}>Inactivo</option></select></div>
+    <div class="field"><label>Notas</label><textarea id="mp-notes" placeholder="Disponibilidade, idiomas, observações…">${esc(u.notes||'')}</textarea></div>
+  `,[
+    isEdit?`<button class="btn danger" onclick="deletePerson('${u.id}')">Apagar ficha</button>`:'',
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Cancelar</button>`,
+    `<button class="btn primary" onclick="savePerson('${isEdit?u.id:''}')">${isEdit?'Guardar alterações':'Criar ficha'}</button>`
+  ]);
+}
+async function savePerson(id){
+  const v=k=>document.getElementById(k).value.trim();
+  const name=v("mp-name"); if(!name){toast("Indique o nome.");return;}
+  const data={name,initials:v("mp-initials"),role:v("mp-role"),company:v("mp-company"),area:v("mp-area"),email:v("mp-email"),phone:v("mp-phone"),status:document.getElementById("mp-status").value,notes:v("mp-notes")};
+  if(id){ const u=person(id); const changes=diffPerson(u,data); Object.assign(u,data);
+    pushLog("Pessoa · "+name, changes.length?("Editada: "+changes.join("; ")):"Guardada sem alterações.", id); toast("Ficha actualizada."); }
+  else { const nu={id:uid("u_"),...data}; people.push(nu);
+    pushLog("Pessoa · "+name,"Ficha criada.",nu.id); openPersonId=nu.id; view="people"; toast("Ficha criada."); }
+  closeModal(); render(); persist();
+}
+async function deletePerson(id){
+  const u=person(id);
+  const refs=personActions(id).length;
+  const projRefs=projects.filter(p=>p.leadId===id||(p.memberIds||[]).includes(id)).length;
+  const total=refs+projRefs;
+  if(total && !confirm(`${u.name} está ligado a ${refs} acção(ões) e ${projRefs} projecto(s). Ao apagar, será removido de todos. Continuar?`)) return;
+  if(!total && !confirm(`Apagar a ficha de ${u.name}?`)) return;
+  actions.forEach(a=>{ if(a.ownerId===id) a.ownerId=""; a.supportIds=(a.supportIds||[]).filter(x=>x!==id); });
+  projects.forEach(p=>{ if(p.leadId===id) p.leadId=""; p.memberIds=(p.memberIds||[]).filter(x=>x!==id); });
+  people=people.filter(x=>x.id!==id);
+  pushLog("Pessoa · "+u.name,`Ficha apagada (estava em ${refs} acção(ões) e ${projRefs} projecto(s)).`,id);
+  closeModal(); openPersonId=null; view="people"; render(); toast("Ficha apagada."); persist();
+}
+function diffPerson(o,n){
+  const labels={name:"nome",initials:"iniciais",role:"função",company:"empresa",area:"área",email:"email",phone:"telefone",status:"estado",notes:"notas"};
+  const out=[]; for(const k in labels){ let ov=o[k],nv=n[k];
+    if(k==="status"){ ov=ESTADOS_PESSOA[ov]||ov; nv=ESTADOS_PESSOA[nv]||nv; }
+    if((ov||"")!==(nv||"")) out.push(`${labels[k]}: «${ov||"—"}» → «${nv||"—"}»`); }
+  return out;
+}
+
+/* ================= MODALS: PROJECT ================= */
+function projectModal(p){
+  const isEdit=!!p; p=p||{priority:projects.length+1};
+  showModal(`${isEdit?"Editar projecto":"Novo projecto"}`,`
+    <div class="field"><label>Nome do projecto</label><input id="m-name" value="${esc(p.name||'')}" placeholder="Ex.: Paytek"></div>
+    <div class="frow">
+      <div class="field"><label>Grupo / vertical</label><select id="m-grupo">${GRUPOS.map(g=>`<option ${p.grupo===g?'selected':''}>${g}</option>`).join("")}</select></div>
+      <div class="field"><label>Lead (responsável do projecto)</label><select id="m-lead"><option value="">— Sem lead —</option>${activePeople().map(u=>`<option value="${u.id}" ${p.leadId===u.id?'selected':''}>${esc(u.name)}${u.initials?' ('+esc(u.initials)+')':''}</option>`).join("")}</select></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Prioridade do Grupo</label><input id="m-prio" type="number" min="1" value="${p.priority||''}"></div>
+      <div class="field"></div>
+    </div>
+    <div class="field"><label>Equipa (segure Ctrl/Cmd para escolher vários)</label>
+      <select id="m-members" multiple size="5" style="height:auto">${activePeople().map(u=>`<option value="${u.id}" ${(p.memberIds||[]).includes(u.id)?'selected':''}>${esc(u.name)}${u.initials?' ('+esc(u.initials)+')':''}</option>`).join("")}</select></div>
+    ${p.teamNote?`<div class="field"><label>Equipa (texto da matriz, não associado a fichas)</label><input id="m-teamnote" value="${esc(p.teamNote)}" placeholder="Ex.: JS? / NQ"></div>`:`<input type="hidden" id="m-teamnote" value="${esc(p.teamNote||'')}">`}
+    <div class="field"><label>Âmbito</label><input id="m-scope" value="${esc(p.scope||'')}" placeholder="Resumo do âmbito do projecto"></div>
+    <div class="field"><label>Notas</label><textarea id="m-notes">${esc(p.notes||'')}</textarea></div>
+  `,[
+    isEdit?`<button class="btn danger" onclick="deleteProject('${p.id}')">Apagar projecto</button>`:'',
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Cancelar</button>`,
+    `<button class="btn primary" onclick="saveProject('${isEdit?p.id:''}')">${isEdit?'Guardar alterações':'Criar projecto'}</button>`
+  ]);
+}
+async function saveProject(id){
+  const v=k=>document.getElementById(k).value.trim();
+  const name=v("m-name"); if(!name){toast("Indique o nome do projecto.");return;}
+  const memSel=document.getElementById("m-members");
+  const memberIds=memSel?Array.from(memSel.selectedOptions).map(o=>o.value):[];
+  const data={name,grupo:document.getElementById("m-grupo").value,priority:+v("m-prio")||null,leadId:document.getElementById("m-lead").value,memberIds,teamNote:v("m-teamnote"),scope:v("m-scope"),notes:v("m-notes")};
+  if(id){ const p=projects.find(x=>x.id===id); const changes=diffProject(p,data); Object.assign(p,data);
+    pushLog("Projecto · "+name, changes.length?("Editado: "+changes.join("; ")):"Guardado sem alterações.", id);
+    toast("Projecto actualizado."); }
+  else { const np={id:uid("p_"),...data}; projects.push(np);
+    pushLog("Projecto · "+name,"Projecto criado.",np.id); openProjectId=np.id; view="projects"; toast("Projecto criado."); }
+  closeModal(); render(); persist();
+}
+function diffProject(o,n){
+  const labels={name:"nome",grupo:"grupo",priority:"prioridade",leadId:"lead",memberIds:"equipa",teamNote:"equipa (texto)",scope:"âmbito",notes:"notas"};
+  const out=[]; for(const k in labels){ let ov=o[k],nv=n[k];
+    if(k==="leadId"){ ov=personName(ov); nv=personName(nv); }
+    if(k==="memberIds"){ ov=(ov||[]).map(personName).filter(Boolean).join(", "); nv=(nv||[]).map(personName).filter(Boolean).join(", "); }
+    if((ov||"")!==(nv||"")) out.push(`${labels[k]}: «${ov||"—"}» → «${nv||"—"}»`); }
+  return out;
+}
+async function deleteProject(id){
+  const p=projects.find(x=>x.id===id); const n=projActions(id).length;
+  if(!confirm(`Apagar "${p.name}" e as suas ${n} acção(ões)? Esta operação não pode ser anulada.`)) return;
+  actions=actions.filter(a=>a.projectId!==id); projects=projects.filter(x=>x.id!==id);
+  pushLog("Projecto · "+p.name,`Projecto e ${n} acção(ões) apagados.`,id);
+  closeModal(); openProjectId=null; view="projects"; render(); toast("Projecto apagado."); persist();
+}
+
+/* ================= MODALS: ACTION ================= */
+function actionModal(a,presetProject){
+  const isEdit=!!a; a=a||{status:"nao_iniciado",priority:2,projectId:presetProject||(projects[0]&&projects[0].id)};
+  showModal(`${isEdit?"Editar acção":"Nova acção"}`,`
+    <div class="field"><label>Título da acção</label><input id="m-title" value="${esc(a.title||'')}" placeholder="O que precisa de ser feito"></div>
+    <div class="frow">
+      <div class="field"><label>Projecto</label><select id="m-proj">${projects.map(p=>`<option value="${p.id}" ${a.projectId===p.id?'selected':''}>${esc(p.name)}</option>`).join("")}</select></div>
+      <div class="field"><label>Estado</label><select id="m-status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?'selected':''}>${v.label}</option>`).join("")}</select></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Responsável</label><select id="m-owner"><option value="">— Sem responsável —</option>${activePeople().map(u=>`<option value="${u.id}" ${a.ownerId===u.id?'selected':''}>${esc(u.name)}${u.initials?' ('+esc(u.initials)+')':''}</option>`).join("")}</select></div>
+      <div class="field"><label>Prioridade</label><select id="m-aprio"><option value="1" ${a.priority==1?'selected':''}>1 — Alta</option><option value="2" ${a.priority==2?'selected':''}>2 — Média</option><option value="3" ${a.priority==3?'selected':''}>3 — Baixa</option></select></div>
+    </div>
+    <div class="field"><label>Apoio (segure Ctrl/Cmd para escolher vários)</label>
+      <select id="m-asupport" multiple size="4" style="height:auto">${activePeople().map(u=>`<option value="${u.id}" ${(a.supportIds||[]).includes(u.id)?'selected':''}>${esc(u.name)}${u.initials?' ('+esc(u.initials)+')':''}</option>`).join("")}</select></div>
+    <div class="frow">
+      <div class="field"><label>Data de início</label><input id="m-begin" type="date" value="${a.beginDate||''}"></div>
+      <div class="field"><label>Prazo</label><input id="m-deadline" type="date" value="${a.deadline||''}"></div>
+    </div>
+    <label class="check" style="margin-bottom:14px"><input type="checkbox" id="m-crit" ${a.critico?'checked':''}> Marcar como crítica</label>
+    <div class="field"><label>Notas / progresso</label><textarea id="m-anotes" placeholder="Registe o ponto de situação — fica no histórico">${esc(a.notes||'')}</textarea></div>
+  `,[
+    isEdit?`<button class="btn danger" onclick="deleteAction('${a.id}')">Apagar acção</button>`:'',
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Cancelar</button>`,
+    `<button class="btn primary" onclick="saveAction('${isEdit?a.id:''}')">${isEdit?'Guardar alterações':'Criar acção'}</button>`
+  ]);
+}
+async function saveAction(id){
+  const v=k=>document.getElementById(k).value, vt=k=>v(k).trim();
+  const title=vt("m-title"); if(!title){toast("Indique o título da acção.");return;}
+  const supSel=document.getElementById("m-asupport");
+  const supportIds=supSel?Array.from(supSel.selectedOptions).map(o=>o.value):[];
+  const data={title,projectId:v("m-proj"),status:v("m-status"),ownerId:v("m-owner"),supportIds,
+    priority:+v("m-aprio"),beginDate:v("m-begin"),deadline:v("m-deadline"),critico:document.getElementById("m-crit").checked,notes:vt("m-anotes")};
+  const pName=projName(data.projectId);
+  if(id){ const a=actions.find(x=>x.id===id); const changes=diff(a,data,true); Object.assign(a,data);
+    pushLog("Acção · "+pName, changes.length?(title+" — "+changes.join("; ")):(title+" — guardada."), id);
+    toast("Acção actualizada."); }
+  else { const na={id:uid("a_"),...data}; actions.push(na);
+    pushLog("Acção · "+pName,"Criada: "+title,na.id); toast("Acção criada."); }
+  closeModal(); render(); persist();
+}
+async function deleteAction(id){
+  const a=actions.find(x=>x.id===id); if(!confirm(`Apagar a acção "${a.title}"?`)) return;
+  const pName=projName(a.projectId); actions=actions.filter(x=>x.id!==id);
+  pushLog("Acção · "+pName,"Apagada: "+a.title,a.projectId);
+  closeModal(); render(); toast("Acção apagada."); persist();
+}
+
+/* diff for log */
+function diff(oldO,newO,isAction){
+  const labels=isAction?{title:"título",status:"estado",ownerId:"responsável",priority:"prioridade",deadline:"prazo",beginDate:"início",critico:"crítica",notes:"notas",supportIds:"apoio",projectId:"projecto"}:{name:"nome",grupo:"grupo",priority:"prioridade",lead:"lead",support:"apoio",scope:"âmbito",notes:"notas"};
+  const out=[];
+  for(const k in labels){
+    let ov=oldO[k], nv=newO[k];
+    if(k==="status"){ ov=STATUS[ov]?STATUS[ov].label:ov; nv=STATUS[nv]?STATUS[nv].label:nv; }
+    if(k==="critico"){ ov=ov?"sim":"não"; nv=nv?"sim":"não"; }
+    if(k==="ownerId"){ ov=personName(ov); nv=personName(nv); }
+    if(k==="projectId"){ ov=projName(ov); nv=projName(nv); }
+    if(k==="supportIds"){ ov=(ov||[]).map(personName).filter(Boolean).join(", "); nv=(nv||[]).map(personName).filter(Boolean).join(", "); }
+    if((ov||"")!==(nv||"")) out.push(`${labels[k]}: «${ov||"—"}» → «${nv||"—"}»`);
+  }
+  return out;
+}
+
+/* ================= MODAL: NUVEM / SINCRONIZAÇÃO ================= */
+function cloudModal(){
+  const connected = !!(cloud.token && cloud.gistId);
+  showModal("Sincronização na nuvem",`
+    <p style="font-size:13px;color:var(--ink-soft);margin-bottom:16px">Sincronize os seus dados entre PC, portátil e telemóvel automaticamente, através de um <b>Gist privado do GitHub</b> (grátis e só seu). Configure uma vez por dispositivo.</p>
+    ${connected?`<div class="cloud-status ok">✓ Ligado. ${esc(syncMsg)}</div>
+      <div class="field" style="margin-top:14px"><label>ID do Gist (igual em todos os dispositivos)</label><input id="cl-gist" value="${esc(cloud.gistId)}" readonly></div>
+      <p style="font-size:12px;color:var(--ink-soft)">Para ligar outro dispositivo: abra lá o painel, clique em Nuvem, escolha <b>"Já tenho um Gist"</b> e cole este ID + um token.</p>`
+    :`<ol class="cloud-steps">
+      <li>Abra <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">github.com/settings/tokens</a> e crie um <b>Fine-grained token</b> (ou clássico). Dê-lhe só a permissão <b>Gists: Read and write</b>.</li>
+      <li>Copie o token (começa por <code>github_pat_</code> ou <code>ghp_</code>) e cole abaixo.</li>
+      <li>Na primeira vez escolha <b>"Criar Gist novo"</b>. Nos outros dispositivos use <b>"Já tenho um Gist"</b> e cole o ID.</li>
+    </ol>
+    <div class="field"><label>Token de acesso do GitHub</label><input id="cl-token" type="password" placeholder="github_pat_… ou ghp_…" value="${esc(cloud.token)}"></div>
+    <div class="field"><label>Modo</label>
+      <select id="cl-mode" onchange="document.getElementById('cl-gistwrap').style.display=this.value==='existing'?'block':'none'">
+        <option value="new">Criar Gist novo (primeiro dispositivo)</option>
+        <option value="existing">Já tenho um Gist (colar ID)</option>
+      </select></div>
+    <div class="field" id="cl-gistwrap" style="display:none"><label>ID do Gist existente</label><input id="cl-gist" placeholder="ex.: 8f3b1c2d4e5f…"></div>
+    <div id="cl-feedback"></div>`}
+  `, connected?[
+    `<button class="btn danger" onclick="cloudDisconnect()">Desligar sincronização</button>`,
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Fechar</button>`,
+    `<button class="btn primary" onclick="cloudPull(false).then(()=>toast('Sincronizado.'))">Sincronizar agora</button>`
+  ]:[
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Cancelar</button>`,
+    `<button class="btn primary" onclick="cloudConnect()">Ligar</button>`
+  ]);
+}
+async function cloudConnect(){
+  const token=document.getElementById("cl-token").value.trim();
+  const mode=document.getElementById("cl-mode").value;
+  const fb=document.getElementById("cl-feedback");
+  if(!token){ fb.innerHTML='<div class="cloud-status err">Indique o token.</div>'; return; }
+  fb.innerHTML='<div class="cloud-status info">A ligar ao GitHub…</div>';
+  try{
+    let gistId;
+    if(mode==="existing"){
+      gistId=document.getElementById("cl-gist").value.trim();
+      if(!gistId){ fb.innerHTML='<div class="cloud-status err">Indique o ID do Gist.</div>'; return; }
+      // valida lendo
+      const r=await fetch("https://api.github.com/gists/"+gistId,{headers:{"Authorization":"Bearer "+token,"Accept":"application/vnd.github+json"}});
+      if(!r.ok) throw new Error("HTTP "+r.status+" — token ou ID inválidos");
+    } else {
+      gistId=await cloudCreateGist(token);
+    }
+    cloud={token,gistId};
+    safeSet(K_CFG,JSON.stringify(cloud));
+    closeModal();
+    await cloudPull(false);
+    render();
+    toast("Sincronização ligada.");
+  }catch(e){ fb.innerHTML='<div class="cloud-status err">Falhou: '+esc(e.message)+'</div>'; }
+}
+function cloudDisconnect(){
+  if(!confirm("Desligar a sincronização neste dispositivo? Os dados locais mantêm-se; deixa só de sincronizar com a nuvem.")) return;
+  cloud={token:"",gistId:""};
+  try{ localStorage.removeItem(K_CFG); }catch(e){}
+  setSync("off","Sincronização desligada");
+  closeModal(); render(); toast("Sincronização desligada.");
+}
+
+/* ================= MODAL PLUMBING ================= */
+function showModal(title,body,footBtns){
+  const wide=body.length>1400;
+  const el=document.createElement("div"); el.className="overlay"; el.id="overlay";
+  el.innerHTML=`<div class="modal ${wide?'wide':''}"><div class="modal-head"><h2>${title}</h2><button class="x" data-close>×</button></div>
+    <div class="modal-body">${body}</div><div class="modal-foot">${footBtns.filter(Boolean).join("")}</div></div>`;
+  document.body.appendChild(el);
+  el.addEventListener("click",e=>{ if(e.target===el||e.target.hasAttribute("data-close")) closeModal(); });
+}
+function closeModal(){ const el=document.getElementById("overlay"); if(el) el.remove(); }
+
+
+/* ================= EXPORT: EXCEL ================= */
+function exportXlsx(){
+  const wb=XLSX.utils.book_new();
+  const today=todayISO();
+  const stLabel=s=>STATUS[s]?STATUS[s].label:s;
+  // Resumo executivo
+  const open=actions.filter(a=>a.status!=="concluido");
+  const summary=[
+    ["Trust Capital — Projects Action Plan"],
+    ["Snapshot de "+today],[],
+    ["Indicador","Valor"],
+    ["Projectos activos",projects.length],
+    ["Acções (total)",actions.length],
+    ["Pendentes críticos",open.filter(a=>a.critico).length],
+    ["Atrasadas",open.filter(isLate).length],
+    ["Em execução",actions.filter(a=>a.status==="em_execucao").length],
+    ["Bloqueadas",actions.filter(a=>a.status==="bloqueado").length],
+    ["Concluídas",actions.filter(a=>a.status==="concluido").length],
+    [],["Projecto","Grupo","Prioridade","Lead","Progresso %","Acções","Críticos abertos","Atrasadas"],
+    ...projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).map(p=>{
+      const as=projActions(p.id);
+      return [p.name,p.grupo,p.priority||"",projLeadName(p),projProgress(p.id),as.length,
+        as.filter(a=>a.critico&&a.status!=="concluido").length,as.filter(isLate).length];
+    })
+  ];
+  const wsS=XLSX.utils.aoa_to_sheet(summary);
+  wsS["!cols"]=[{wch:28},{wch:22},{wch:11},{wch:18},{wch:12},{wch:9},{wch:15},{wch:11}];
+  XLSX.utils.book_append_sheet(wb,wsS,"Resumo");
+  // Todas as acções
+  const head=["Projecto","Acção","Prioridade","Estado","Atrasada","Crítica","Responsável","Apoio","Início","Prazo","Notas"];
+  const rows=actions.slice().sort((a,b)=>(projName(a.projectId)).localeCompare(projName(b.projectId))||(a.priority||9)-(b.priority||9))
+    .map(a=>[projName(a.projectId),a.title,a.priority||"",stLabel(a.status),isLate(a)?"SIM":"",a.critico?"SIM":"",ownerName(a),supportNames(a),a.beginDate||"",a.deadline||"",a.notes||""]);
+  const wsA=XLSX.utils.aoa_to_sheet([head,...rows]);
+  wsA["!cols"]=[{wch:20},{wch:36},{wch:10},{wch:14},{wch:9},{wch:8},{wch:18},{wch:14},{wch:12},{wch:12},{wch:40}];
+  XLSX.utils.book_append_sheet(wb,wsA,"Acções");
+  // Um separador por projecto
+  projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).forEach(p=>{
+    const as=projActions(p.id);
+    const data=[["Projecto",p.name],["Grupo",p.grupo],["Prioridade",p.priority||""],["Lead",projLeadName(p)],["Equipa",projTeamText(p)],["Âmbito",p.scope||""],["Notas",p.notes||""],["Progresso",projProgress(p.id)+"%"],[],
+      ["Acção","Prioridade","Estado","Atrasada","Crítica","Responsável","Prazo","Notas"],
+      ...as.map(a=>[a.title,a.priority||"",stLabel(a.status),isLate(a)?"SIM":"",a.critico?"SIM":"",ownerName(a),a.deadline||"",a.notes||""])];
+    const ws=XLSX.utils.aoa_to_sheet(data);
+    ws["!cols"]=[{wch:34},{wch:10},{wch:14},{wch:9},{wch:8},{wch:18},{wch:12},{wch:34}];
+    let nm=p.name.replace(/[\\/?*\[\]:]/g,"").slice(0,28)||"Projecto"; XLSX.utils.book_append_sheet(wb,ws,nm);
+  });
+  // Pessoas
+  const phead=["Nome","Iniciais","Função","Empresa/Entidade","Área","Email","Telefone","Estado","Acções activas","Notas"];
+  const prows=people.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(u=>[u.name,u.initials||"",u.role||"",u.company||"",u.area||"",u.email||"",u.phone||"",ESTADOS_PESSOA[u.status]||u.status,personActions(u.id).filter(a=>a.status!=="concluido").length,u.notes||""]);
+  const wsP=XLSX.utils.aoa_to_sheet([phead,...prows]);
+  wsP["!cols"]=[{wch:22},{wch:9},{wch:22},{wch:20},{wch:18},{wch:26},{wch:16},{wch:10},{wch:14},{wch:34}];
+  XLSX.utils.book_append_sheet(wb,wsP,"Pessoas");
+  // Histórico
+  const wsL=XLSX.utils.aoa_to_sheet([["Data/Hora","Entidade","Descrição"],...logEntries.slice().reverse().map(l=>[fmtTs(l.ts),l.entity,l.what])]);
+  wsL["!cols"]=[{wch:18},{wch:24},{wch:70}];
+  XLSX.utils.book_append_sheet(wb,wsL,"Histórico");
+  XLSX.writeFile(wb,`TrustCapital_Report_${today}.xlsx`);
+  toast("Excel descarregado.");
+}
+
+/* ================= EXPORT: PDF ================= */
+function exportPdf(){
+  const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:"pt",format:"a4"});
+  const W=doc.internal.pageSize.getWidth(); const today=todayISO();
+  const navy=[31,58,95], soft=[71,80,105], crit=[179,38,30], warn=[154,103,0];
+  // Header band
+  doc.setFillColor(...navy); doc.rect(0,0,W,76,"F");
+  doc.setTextColor(255,255,255); doc.setFont("times","bold"); doc.setFontSize(19);
+  doc.text("Trust Capital",40,38); doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.setTextColor(180,205,230); doc.text("Projects Action Plan — Report executivo",40,56);
+  doc.setTextColor(255,255,255); doc.text(today,W-40,38,{align:"right"});
+  // KPIs
+  const open=actions.filter(a=>a.status!=="concluido");
+  const kpis=[["Críticos abertos",open.filter(a=>a.critico).length,crit],["Atrasadas",open.filter(isLate).length,warn],
+    ["Em execução",actions.filter(a=>a.status==="em_execucao").length,navy],["Concluídas",actions.filter(a=>a.status==="concluido").length,[26,127,84]]];
+  let x=40; const cw=(W-80-30)/4;
+  kpis.forEach(([lab,val,col])=>{
+    doc.setDrawColor(223,227,236); doc.setFillColor(251,252,253); doc.roundedRect(x,96,cw,58,5,5,"FD");
+    doc.setFillColor(...col); doc.rect(x,96,3.5,58,"F");
+    doc.setTextColor(...soft); doc.setFontSize(8); doc.text(lab.toUpperCase(),x+12,114);
+    doc.setTextColor(...col); doc.setFont("times","bold"); doc.setFontSize(26); doc.text(String(val),x+12,144);
+    doc.setFont("helvetica","normal"); x+=cw+10;
+  });
+  const stLabel=s=>STATUS[s]?STATUS[s].label:s;
+  // Críticos
+  let y=178;
+  const critList=open.filter(a=>a.critico).sort((a,b)=>(a.priority||9)-(b.priority||9));
+  doc.setTextColor(...navy); doc.setFont("times","bold"); doc.setFontSize(13); doc.text("Pendentes críticos",40,y); y+=6;
+  doc.autoTable({startY:y,head:[["Pri","Acção","Projecto","Responsável","Estado","Prazo"]],
+    body:critList.length?critList.map(a=>[a.priority||"–",a.title,projName(a.projectId),ownerName(a)||"—",stLabel(a.status)+(isLate(a)?" (atrasada)":""),a.deadline||"—"]):[["","Sem pendentes críticos.","","","",""]],
+    theme:"grid",headStyles:{fillColor:navy,fontSize:8,halign:"left"},bodyStyles:{fontSize:8,textColor:[40,48,64]},
+    columnStyles:{0:{cellWidth:28,halign:"center"},1:{cellWidth:170}},margin:{left:40,right:40}});
+  // Atrasadas
+  y=doc.lastAutoTable.finalY+22;
+  const lateList=open.filter(isLate).sort((a,b)=>(a.deadline||"").localeCompare(b.deadline||""));
+  doc.setTextColor(...navy); doc.setFont("times","bold"); doc.setFontSize(13); doc.text("Acções atrasadas",40,y); y+=6;
+  doc.autoTable({startY:y,head:[["Acção","Projecto","Responsável","Prazo"]],
+    body:lateList.length?lateList.map(a=>[a.title,projName(a.projectId),ownerName(a)||"—",a.deadline||"—"]):[["Sem acções atrasadas.","","",""]],
+    theme:"grid",headStyles:{fillColor:warn,fontSize:8},bodyStyles:{fontSize:8,textColor:[40,48,64]},margin:{left:40,right:40}});
+  // Estado por projecto
+  y=doc.lastAutoTable.finalY+22;
+  if(y>720){doc.addPage();y=50;}
+  doc.setTextColor(...navy); doc.setFont("times","bold"); doc.setFontSize(13); doc.text("Estado por projecto",40,y); y+=6;
+  doc.autoTable({startY:y,head:[["Pri","Projecto","Grupo","Lead","Progresso","Acções","Críticos"]],
+    body:projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).map(p=>{const as=projActions(p.id);return[p.priority||"–",p.name,p.grupo,projLeadName(p)||"—",projProgress(p.id)+"%",as.length,as.filter(a=>a.critico&&a.status!=="concluido").length];}),
+    theme:"grid",headStyles:{fillColor:navy,fontSize:8},bodyStyles:{fontSize:8,textColor:[40,48,64]},columnStyles:{0:{cellWidth:28,halign:"center"}},margin:{left:40,right:40}});
+  // Footer
+  const pages=doc.internal.getNumberOfPages();
+  for(let i=1;i<=pages;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(150,158,172);
+    doc.text("Trust Capital · Confidencial · Gerado em "+today,40,doc.internal.pageSize.getHeight()-20);
+    doc.text(`${i}/${pages}`,W-40,doc.internal.pageSize.getHeight()-20,{align:"right"});}
+  doc.save(`TrustCapital_Board_${today}.pdf`);
+  toast("PDF descarregado.");
+}
+
+/* ================= EVENT BINDINGS ================= */
+function bindGlobal(){
+  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=e=>{e.preventDefault();view=el.getAttribute("data-nav");openProjectId=null;openPersonId=null;render();});
+  document.querySelectorAll("[data-act]").forEach(el=>el.onclick=()=>{
+    const a=el.getAttribute("data-act");
+    if(a==="new-project")projectModal();
+    else if(a==="new-action"){if(!projects.length){toast("Crie primeiro um projecto.");return;}actionModal(null,el.getAttribute("data-for"));}
+    else if(a==="new-person")personModal();
+    else if(a==="cloud-settings")cloudModal();
+    else if(a==="export-xlsx")exportXlsx();
+    else if(a==="export-pdf")exportPdf();
+  });
+  document.querySelectorAll("[data-edit-project]").forEach(el=>el.onclick=e=>{e.stopPropagation();projectModal(projects.find(p=>p.id===el.getAttribute("data-edit-project")));});
+  document.querySelectorAll("[data-edit-action]").forEach(el=>el.onclick=e=>{e.stopPropagation();actionModal(actions.find(a=>a.id===el.getAttribute("data-edit-action")));});
+  document.querySelectorAll("[data-edit-person]").forEach(el=>el.onclick=e=>{e.stopPropagation();personModal(person(el.getAttribute("data-edit-person")));});
+  bindRowClicks();
+}
+function bindRowClicks(){
+  document.querySelectorAll("[data-open-project]").forEach(el=>el.onclick=()=>{openProjectId=el.getAttribute("data-open-project");view="projects";render();});
+  document.querySelectorAll("[data-open-action]").forEach(el=>el.onclick=()=>{actionModal(actions.find(a=>a.id===el.getAttribute("data-open-action")));});
+  document.querySelectorAll("[data-open-person]").forEach(el=>el.onclick=()=>{openPersonId=el.getAttribute("data-open-person");view="people";render();});
+}
+
+/* ================= BOOT ================= */
+(async function(){ await loadAll(); render(); })();
+// Sincronização periódica: a cada 60s verifica se há versão mais recente na nuvem
+setInterval(()=>{ if(cloud.token&&cloud.gistId&&syncState!=="syncing"&&!document.getElementById("overlay")) cloudPull(false); }, 60000);
+// Ao voltar à app (mudar de separador/dispositivo), sincroniza
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&cloud.token&&cloud.gistId&&!document.getElementById("overlay")) cloudPull(false); });
+
+</script>
+</body>
+</html>
