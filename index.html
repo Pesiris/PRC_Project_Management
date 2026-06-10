@@ -242,11 +242,11 @@ let syncMsg = "Sincronização desligada";
      2. Gere o novo hash (ver instruções no Guia).
      3. Substitua o valor de AUTH_HASH abaixo.
    Credenciais iniciais (MUDE-AS depois):
-     Utilizador:  PRCadmin
+     Utilizador:  jlouro
      Palavra-passe: Gorongosa-5827-zambeze
    ============================================================ */
 const AUTH_SALT = "tc_v1_";
-const AUTH_HASH = "6cd41651d654599b9b5cf6bfc89a7f32a6c45558678f28651c494d6a502c65d5";
+const AUTH_HASH = "e811a4fafc71eb6063433bb0aed8d38d8d0d75fb4df8f5bfe2ae9155b8349cc6";
 async function sha256(txt){
   const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
