@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trust Capital — Painel de Gestão de Projectos</title>
+<title>PR Corporation SA — Painel de Gestão de Projectos</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -198,13 +198,26 @@ tbody tr:hover{background:#fafbfc}
   .frow,.frow-3{grid-template-columns:1fr}
   .wrap{padding:14px}
 }
+/* ---- Ecrã de bloqueio ---- */
+.lock{position:fixed;inset:0;background:linear-gradient(135deg,#1f3a5f,#15273f);display:flex;align-items:center;justify-content:center;z-index:200;padding:20px}
+.lock-card{background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.4);width:100%;max-width:380px;padding:36px 34px;text-align:center;animation:pop .25s ease}
+.lock-card .lk-brand{font-family:'Fraunces',serif;font-weight:600;font-size:24px;color:#1f3a5f}
+.lock-card .lk-sub{font-size:11px;color:#98a2b3;text-transform:uppercase;letter-spacing:2px;margin-bottom:24px}
+.lock-card .lk-lock{width:48px;height:48px;margin:0 auto 16px;border-radius:50%;background:#e8eff6;display:flex;align-items:center;justify-content:center;font-size:22px}
+.lock-card label{display:block;text-align:left;font-size:12px;font-weight:600;color:#475069;margin:0 0 5px}
+.lock-card input{width:100%;padding:11px 13px;border:1px solid #dfe3ec;border-radius:8px;font-size:14px;margin-bottom:14px;font-family:inherit}
+.lock-card input:focus{outline:0;border-color:#2d5a8c;box-shadow:0 0 0 3px rgba(45,90,140,.12)}
+.lock-card button{width:100%;padding:12px;background:#1f3a5f;color:#fff;border:0;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s}
+.lock-card button:hover{background:#2d5a8c}
+.lock-err{background:#fdeceb;color:#b3261e;font-size:12px;padding:9px;border-radius:7px;margin-bottom:14px;display:none}
+.lock-err.show{display:block}
 </style>
 </head>
 <body>
 <div id="app"><div class="loading">A carregar o painel…</div></div>
 <script>
 /* ============================================================
-   TRUST CAPITAL — Painel de Gestão de Projectos
+   PR CORPORATION SA — Painel de Gestão de Projectos
    Armazenamento local (localStorage) + sincronização automática
    na nuvem via Gist privado do GitHub. Funciona em qualquer
    dispositivo e offline; sincroniza quando há ligação.
@@ -220,6 +233,52 @@ const GIST_FILE = "trustcapital_data.json";
 let cloud = { token:"", gistId:"" };   // configuração de nuvem (por dispositivo)
 let syncState = "off";                  // off | ok | syncing | error
 let syncMsg = "Sincronização desligada";
+
+/* ============================================================
+   ACESSO — palavra-passe pedida sempre que a app abre.
+   Guardamos só o "hash" (impressão digital) das credenciais,
+   nunca a password em texto. Para MUDAR as credenciais:
+     1. Defina o novo user/password.
+     2. Gere o novo hash (ver instruções no Guia).
+     3. Substitua o valor de AUTH_HASH abaixo.
+   Credenciais iniciais (MUDE-AS depois):
+     Utilizador:  PRCadmin
+     Palavra-passe: Gorongosa-5827-zambeze
+   ============================================================ */
+const AUTH_SALT = "tc_v1_";
+const AUTH_HASH = "6cd41651d654599b9b5cf6bfc89a7f32a6c45558678f28651c494d6a502c65d5";
+async function sha256(txt){
+  const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+async function checkCredentials(user,pass){
+  const h=await sha256(AUTH_SALT+user.trim()+":"+pass);
+  return h===AUTH_HASH;
+}
+function showLogin(){
+  const app=document.getElementById("app");
+  app.innerHTML=`<div class="lock"><div class="lock-card">
+    <div class="lk-lock">🔒</div>
+    <div class="lk-brand">PR Corporation SA</div>
+    <div class="lk-sub">Action Plan</div>
+    <div class="lock-err" id="lk-err">Credenciais incorrectas. Tente de novo.</div>
+    <label>Utilizador</label>
+    <input id="lk-user" autocomplete="username" autofocus>
+    <label>Palavra-passe</label>
+    <input id="lk-pass" type="password" autocomplete="current-password">
+    <button id="lk-btn">Entrar</button>
+  </div></div>`;
+  const tryLogin=async()=>{
+    const u=document.getElementById("lk-user").value;
+    const p=document.getElementById("lk-pass").value;
+    if(await checkCredentials(u,p)){ sessionStorage.setItem("tc:auth","1"); boot(); }
+    else { document.getElementById("lk-err").classList.add("show"); document.getElementById("lk-pass").value=""; document.getElementById("lk-pass").focus(); }
+  };
+  document.getElementById("lk-btn").onclick=tryLogin;
+  document.getElementById("lk-pass").addEventListener("keydown",e=>{ if(e.key==="Enter") tryLogin(); });
+  document.getElementById("lk-user").addEventListener("keydown",e=>{ if(e.key==="Enter") document.getElementById("lk-pass").focus(); });
+}
+
 const STATUS = {
   nao_iniciado:{label:"Não iniciado",cls:"b-idle"},
   em_execucao:{label:"Em execução",cls:"b-exec"},
@@ -425,7 +484,7 @@ async function cloudPush(rev){
 }
 // Cria um Gist novo a partir do estado actual e guarda o id
 async function cloudCreateGist(token){
-  const body={ description:"Trust Capital — dados do painel (privado)", public:false,
+  const body={ description:"PR Corporation SA — dados do painel (privado)", public:false,
     files:{ [GIST_FILE]:{ content:JSON.stringify(Object.assign(snapshot(),{rev:Date.now()})) } } };
   const r=await fetch("https://api.github.com/gists",{
     method:"POST",
@@ -482,7 +541,7 @@ function render(){
 function topbar(){
   const t=(id,lab)=>`<button class="tab ${view===id&&!openProjectId&&!openPersonId?'on':''}" data-nav="${id}">${lab}</button>`;
   return `<div class="topbar">
-    <div class="brand"><b>Trust Capital</b><span>Action Plan</span></div>
+    <div class="brand"><b>PR Corporation SA</b><span>PRC · Action Plan</span></div>
     <div class="tabs">
       ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${t("log","Histórico")}${t("reports","Reports")}
     </div>
@@ -490,6 +549,7 @@ function topbar(){
       <button class="sync-badge sync-${syncState}" data-act="cloud-settings" title="${esc(syncMsg)}"><span class="sync-dot"></span><span id="sync-label">${syncLabel()}</span></button>
       <button class="btn ghost sm" data-act="new-person">+ Pessoa</button>
       <button class="btn ghost sm" data-act="new-action">+ Acção</button>
+      <button class="btn ghost sm" data-act="logout" title="Bloquear e sair">Sair</button>
     </div>
   </div>`;
 }
@@ -731,7 +791,7 @@ function personModal(u){
     </div>
     <div class="frow">
       <div class="field"><label>Função / cargo</label><input id="mp-role" value="${esc(u.role||'')}" placeholder="Ex.: Director Financeiro"></div>
-      <div class="field"><label>Empresa / entidade do Grupo</label><input id="mp-company" value="${esc(u.company||'')}" placeholder="Ex.: Trust Capital"></div>
+      <div class="field"><label>Empresa / entidade do Grupo</label><input id="mp-company" value="${esc(u.company||'')}" placeholder="Ex.: PR Corporation SA"></div>
     </div>
     <div class="field"><label>Área / especialidade</label><input id="mp-area" value="${esc(u.area||'')}" placeholder="Ex.: O&G, Renováveis, Jurídico"></div>
     <div class="frow">
@@ -983,7 +1043,7 @@ function exportXlsx(){
   // Resumo executivo
   const open=actions.filter(a=>a.status!=="concluido");
   const summary=[
-    ["Trust Capital — Projects Action Plan"],
+    ["PR Corporation SA — Projects Action Plan"],
     ["Snapshot de "+today],[],
     ["Indicador","Valor"],
     ["Projectos activos",projects.length],
@@ -1030,7 +1090,7 @@ function exportXlsx(){
   const wsL=XLSX.utils.aoa_to_sheet([["Data/Hora","Entidade","Descrição"],...logEntries.slice().reverse().map(l=>[fmtTs(l.ts),l.entity,l.what])]);
   wsL["!cols"]=[{wch:18},{wch:24},{wch:70}];
   XLSX.utils.book_append_sheet(wb,wsL,"Histórico");
-  XLSX.writeFile(wb,`TrustCapital_Report_${today}.xlsx`);
+  XLSX.writeFile(wb,`PRCorporation_Report_${today}.xlsx`);
   toast("Excel descarregado.");
 }
 
@@ -1042,7 +1102,7 @@ function exportPdf(){
   // Header band
   doc.setFillColor(...navy); doc.rect(0,0,W,76,"F");
   doc.setTextColor(255,255,255); doc.setFont("times","bold"); doc.setFontSize(19);
-  doc.text("Trust Capital",40,38); doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("PR Corporation SA",40,38); doc.setFont("helvetica","normal"); doc.setFontSize(10);
   doc.setTextColor(180,205,230); doc.text("Projects Action Plan — Report executivo",40,56);
   doc.setTextColor(255,255,255); doc.text(today,W-40,38,{align:"right"});
   // KPIs
@@ -1083,9 +1143,9 @@ function exportPdf(){
   // Footer
   const pages=doc.internal.getNumberOfPages();
   for(let i=1;i<=pages;i++){doc.setPage(i);doc.setFontSize(7);doc.setTextColor(150,158,172);
-    doc.text("Trust Capital · Confidencial · Gerado em "+today,40,doc.internal.pageSize.getHeight()-20);
+    doc.text("PR Corporation SA · Confidencial · Gerado em "+today,40,doc.internal.pageSize.getHeight()-20);
     doc.text(`${i}/${pages}`,W-40,doc.internal.pageSize.getHeight()-20,{align:"right"});}
-  doc.save(`TrustCapital_Board_${today}.pdf`);
+  doc.save(`PRCorporation_Board_${today}.pdf`);
   toast("PDF descarregado.");
 }
 
@@ -1098,6 +1158,7 @@ function bindGlobal(){
     else if(a==="new-action"){if(!projects.length){toast("Crie primeiro um projecto.");return;}actionModal(null,el.getAttribute("data-for"));}
     else if(a==="new-person")personModal();
     else if(a==="cloud-settings")cloudModal();
+    else if(a==="logout"){ sessionStorage.removeItem("tc:auth"); showLogin(); }
     else if(a==="export-xlsx")exportXlsx();
     else if(a==="export-pdf")exportPdf();
   });
@@ -1113,11 +1174,16 @@ function bindRowClicks(){
 }
 
 /* ================= BOOT ================= */
-(async function(){ await loadAll(); render(); })();
+async function boot(){ await loadAll(); render(); }
+// Pede a palavra-passe sempre que a app abre (sessão nova). Um reload na mesma sessão não volta a pedir.
+(function(){
+  if(sessionStorage.getItem("tc:auth")==="1") boot();
+  else showLogin();
+})();
 // Sincronização periódica: a cada 60s verifica se há versão mais recente na nuvem
-setInterval(()=>{ if(cloud.token&&cloud.gistId&&syncState!=="syncing"&&!document.getElementById("overlay")) cloudPull(false); }, 60000);
+setInterval(()=>{ if(cloud.token&&cloud.gistId&&syncState!=="syncing"&&!document.getElementById("overlay")&&sessionStorage.getItem("tc:auth")==="1") cloudPull(false); }, 60000);
 // Ao voltar à app (mudar de separador/dispositivo), sincroniza
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&cloud.token&&cloud.gistId&&!document.getElementById("overlay")) cloudPull(false); });
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&cloud.token&&cloud.gistId&&!document.getElementById("overlay")&&sessionStorage.getItem("tc:auth")==="1") cloudPull(false); });
 
 </script>
 </body>
