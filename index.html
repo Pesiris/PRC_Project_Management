@@ -198,6 +198,37 @@ tbody tr:hover{background:#fafbfc}
   .frow,.frow-3{grid-template-columns:1fr}
   .wrap{padding:14px}
 }
+/* ---- Cronograma (Gantt) ---- */
+.gantt{font-size:12px;position:relative}
+.g-head{display:flex;border-bottom:1px solid var(--line);background:#fbfcfd;position:relative;height:30px}
+.g-lab-head{width:220px;flex:none;border-right:1px solid var(--line)}
+.g-track-head{flex:1;position:relative}
+.g-tick{position:absolute;top:0;bottom:0;border-left:1px solid var(--line-soft)}
+.g-tick span{position:absolute;top:8px;left:4px;font-size:10px;color:var(--ink-soft);white-space:nowrap}
+.g-body{position:relative;max-height:340px;overflow-y:auto}
+.g-row{display:flex;align-items:center;height:30px;border-bottom:1px solid var(--line-soft)}
+.g-row:hover{background:#fafbfc}
+.g-lab{width:220px;flex:none;padding:0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid var(--line);font-size:12px}
+.g-lab.proj{font-weight:700;color:var(--ink)}
+.g-lab.act{padding-left:24px;color:var(--ink-soft)}
+.g-dot.proj{display:inline-block;width:7px;height:7px;border-radius:2px;background:var(--brand);margin-right:7px;vertical-align:middle}
+.g-track{flex:1;position:relative;height:100%}
+.g-bar{position:absolute;top:50%;transform:translateY(-50%);height:14px;border-radius:4px;cursor:pointer;min-width:5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.05)}
+.g-bar:hover{filter:brightness(.93);height:16px}
+.g-bar.proj{background:#cfd8e4;height:9px;border-radius:3px}
+.g-bar.exec{background:#5a8bc0}
+.g-bar.crit{background:#d8675f}
+.g-bar.late{background:#e0a93b}
+.g-bar.block{background:#9b6cc4}
+.g-bar.done{background:#5cb38a}
+.g-bar.milestone{width:14px!important;height:14px!important;border-radius:50%;transform:translateY(-50%) rotate(0)}
+.g-nodate{font-size:10px;color:#b0b6c0;font-style:italic;padding-left:8px;line-height:30px}
+.g-today-line{position:absolute;top:0;bottom:0;width:2px;background:#b3261e;z-index:2}
+.g-today-line.full{position:absolute;top:0;bottom:0;width:2px;background:rgba(179,38,30,.5);z-index:1;pointer-events:none}
+.lg-chip{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:3px;vertical-align:middle}
+.lg-chip.exec{background:#5a8bc0}.lg-chip.crit{background:#d8675f}.lg-chip.late{background:#e0a93b}.lg-chip.done{background:#5cb38a}
+.lg-chip.today{background:#b3261e;width:3px;height:11px;border-radius:1px}
+
 /* ---- Ecrã de bloqueio ---- */
 .lock{position:fixed;inset:0;background:linear-gradient(135deg,#1f3a5f,#15273f);display:flex;align-items:center;justify-content:center;z-index:200;padding:20px}
 .lock-card{background:#fff;border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.4);width:100%;max-width:380px;padding:36px 34px;text-align:center;animation:pop .25s ease}
@@ -242,8 +273,8 @@ let syncMsg = "Sincronização desligada";
      2. Gere o novo hash (ver instruções no Guia).
      3. Substitua o valor de AUTH_HASH abaixo.
    Credenciais iniciais (MUDE-AS depois):
-     Utilizador:  jlouro
-     Palavra-passe: Gorongosa-5827-zambeze
+     Utilizador:  PRCadmin
+     Palavra-passe: prc2026
    ============================================================ */
 const AUTH_SALT = "tc_v1_";
 const AUTH_HASH = "8fd8f5b5f7b63e19de6261e85157fa4f74df11db70d06c38fd13cfa560568193";
@@ -591,11 +622,87 @@ function renderDashboard(){
     <div class="kpi c-exec"><div class="bar"></div><div class="lab">Em execução</div><div class="num">${exec.length}</div><div class="sub">${blocked.length} bloqueada(s)</div></div>
     <div class="kpi c-ok"><div class="bar"></div><div class="lab">Concluídas</div><div class="num">${done.length}</div><div class="sub">de ${actions.length} acções no total</div></div>
   </div>
+  ${ganttPanel()}
   ${section("Pendentes críticos", sortP(crit), "Sem críticos em aberto. Bom sinal.")}
   ${section("Em execução", sortP(exec), "Nenhuma acção em execução.")}
   ${blocked.length?section("Bloqueadas", sortP(blocked), ""):""}
   ${section("Terminadas recentemente", done.slice(-6).reverse(), "Ainda nenhuma acção concluída.")}`;
 }
+
+/* ================= CRONOGRAMA (GANTT) ================= */
+function ganttPanel(){
+  // Recolhe itens com pelo menos uma data; agrupa por projecto
+  const parse=d=>{ if(!d) return null; const t=new Date(d+"T00:00:00"); return isNaN(t)?null:t; };
+  const today=new Date(todayISO()+"T00:00:00");
+  const rows=[]; // {type:'proj'|'act', label, start, end, status, late, critico, indent}
+  let minD=null, maxD=null;
+  const consider=(s,e)=>{ if(s){minD=!minD||s<minD?s:minD; maxD=!maxD||s>maxD?s:maxD;} if(e){minD=!minD||e<minD?e:minD; maxD=!maxD||e>maxD?e:maxD;} };
+
+  projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).forEach(p=>{
+    const as=projActions(p.id);
+    const dated=as.filter(a=>a.beginDate||a.deadline);
+    // Barra do projecto = envelope das suas acções (ou nada se sem datas)
+    let ps=null,pe=null;
+    dated.forEach(a=>{ const s=parse(a.beginDate)||parse(a.deadline), e=parse(a.deadline)||parse(a.beginDate); if(s&&(!ps||s<ps))ps=s; if(e&&(!pe||e>pe))pe=e; });
+    if(ps||pe){ rows.push({type:'proj',label:p.name,start:ps,end:pe,projId:p.id}); consider(ps,pe); }
+    else rows.push({type:'proj',label:p.name,start:null,end:null,projId:p.id,nodate:true});
+    dated.forEach(a=>{
+      const s=parse(a.beginDate)||parse(a.deadline), e=parse(a.deadline)||parse(a.beginDate);
+      rows.push({type:'act',label:a.title,start:s,end:e,status:a.status,late:isLate(a),critico:a.critico,actId:a.id});
+      consider(s,e);
+    });
+  });
+
+  if(!minD||!maxD){ return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2></div><div class="panel"><div class="empty-state"><p>Sem datas definidas nas acções ainda. Adicione datas de início e prazo às acções para verem o cronograma aqui.</p></div></div></div>`; }
+
+  // Garante que "hoje" entra na janela e dá margem
+  if(today<minD)minD=today; if(today>maxD)maxD=today;
+  const pad=Math.max(3, Math.round((maxD-minD)/(1000*60*60*24)*0.05));
+  minD=new Date(minD.getTime()-pad*864e5); maxD=new Date(maxD.getTime()+pad*864e5);
+  const span=(maxD-minD)||864e5;
+  const pct=d=>((d-minD)/span*100);
+
+  // Marcas de mês
+  const ticks=[]; let t=new Date(minD.getFullYear(),minD.getMonth(),1);
+  while(t<=maxD){ if(t>=minD) ticks.push(new Date(t)); t=new Date(t.getFullYear(),t.getMonth()+1,1); }
+  const meses=["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  const tickHtml=ticks.map(d=>`<div class="g-tick" style="left:${pct(d)}%"><span>${meses[d.getMonth()]} ${String(d.getFullYear()).slice(2)}</span></div>`).join("");
+  const todayPct=pct(today);
+
+  const barHtml=rows.map(r=>{
+    if(r.nodate) return `<div class="g-row"><div class="g-lab proj"><span class="g-dot proj"></span>${esc(r.label)}</div><div class="g-track"><span class="g-nodate">sem datas</span></div></div>`;
+    const s=r.start||r.end, e=r.end||r.start;
+    let left=pct(s), width=Math.max(0.8, pct(e)-pct(s));
+    let cls = r.type==='proj' ? 'proj' : (r.status==='concluido'?'done':r.late?'late':r.critico?'crit':r.status==='bloqueado'?'block':'exec');
+    const oneDay = (e-s)<864e5*1.5;
+    const data = r.type==='proj'?`data-open-project="${r.projId}"`:`data-open-action="${r.actId}"`;
+    const tip = `${r.label} · ${r.start?fmtD(r.start):'?'}${r.end&&r.end!==r.start?' → '+fmtD(r.end):''}`;
+    return `<div class="g-row">
+      <div class="g-lab ${r.type}" ${data} style="cursor:pointer" title="${esc(r.label)}">${r.type==='proj'?'<span class="g-dot proj"></span>':''}${esc(r.label)}</div>
+      <div class="g-track">
+        <div class="g-bar ${cls} ${oneDay?'milestone':''}" ${data} style="left:${left}%;width:${width}%" title="${esc(tip)}"></div>
+      </div></div>`;
+  }).join("");
+
+  return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2><span class="count">${rows.filter(r=>!r.nodate).length} com datas</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--ink-soft);display:flex;gap:12px;flex-wrap:wrap">
+        <span><span class="lg-chip exec"></span>Em execução</span>
+        <span><span class="lg-chip crit"></span>Crítica</span>
+        <span><span class="lg-chip late"></span>Atrasada</span>
+        <span><span class="lg-chip done"></span>Concluída</span>
+        <span><span class="lg-chip today"></span>Hoje</span>
+      </span></div>
+    <div class="panel" style="padding:0;overflow:hidden">
+      <div class="gantt">
+        <div class="g-head"><div class="g-lab-head"></div><div class="g-track-head">${tickHtml}<div class="g-today-line" style="left:${todayPct}%"></div></div></div>
+        <div class="g-body">
+          <div class="g-today-line full" style="left:calc(220px + (100% - 220px) * ${todayPct/100})"></div>
+          ${barHtml}
+        </div>
+      </div>
+    </div></div>`;
+}
+function fmtD(d){ return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
 
 /* ================= PROJECTS GRID ================= */
 function renderProjects(){
@@ -726,6 +833,7 @@ function avatarHtml(u,lg){
   const palette=["#2d5a8c","#1a7f54","#9a6700","#7a3ea8","#b3261e","#1f3a5f","#0f766e","#5a6478"];
   const idx=(u.name.charCodeAt(0)||0)%palette.length;
   const ini=u.initials || (u.name.split(/\s+/).map(w=>w[0]).slice(0,2).join("").toUpperCase());
+  if(u.photo) return `<div class="avatar ${lg?'lg':''}" style="background-image:url('${u.photo}');background-size:cover;background-position:center"></div>`;
   return `<div class="avatar ${lg?'lg':''}" style="background:${palette[idx]}">${esc(ini||"?")}</div>`;
 }
 function renderPeople(){
@@ -784,7 +892,17 @@ function renderPersonDetail(uid){
 /* ================= MODAL: PESSOA ================= */
 function personModal(u){
   const isEdit=!!u; u=u||{status:"ativo"};
+  window._tmpPhoto = u.photo||"";  // foto em edição (data URL)
   showModal(`${isEdit?"Editar ficha":"Nova ficha de trabalhador"}`,`
+    <div style="display:flex;gap:18px;align-items:center;margin-bottom:16px">
+      <div id="mp-photo-prev" class="avatar lg" style="${u.photo?`background-image:url('${u.photo}');background-size:cover;background-position:center`:'background:#2d5a8c'}">${u.photo?'':esc((u.initials||u.name||'?').slice(0,2).toUpperCase())}</div>
+      <div>
+        <input type="file" id="mp-photo-file" accept="image/*" style="display:none" onchange="handlePhotoPick(this)">
+        <button type="button" class="btn sm" onclick="document.getElementById('mp-photo-file').click()">Carregar foto</button>
+        ${u.photo?`<button type="button" class="btn sm" onclick="clearPhotoPick()" style="margin-left:6px">Remover</button>`:''}
+        <div class="t-meta" style="margin-top:6px;font-size:11px">JPG ou PNG. É redimensionada automaticamente.</div>
+      </div>
+    </div>
     <div class="frow">
       <div class="field"><label>Nome completo</label><input id="mp-name" value="${esc(u.name||'')}" placeholder="Ex.: Paulo Ratilal"></div>
       <div class="field"><label>Iniciais / alcunha</label><input id="mp-initials" value="${esc(u.initials||'')}" placeholder="Ex.: PR"></div>
@@ -807,15 +925,43 @@ function personModal(u){
     `<button class="btn primary" onclick="savePerson('${isEdit?u.id:''}')">${isEdit?'Guardar alterações':'Criar ficha'}</button>`
   ]);
 }
+// Lê a foto escolhida, redimensiona para ~256px e comprime para JPEG (data URL leve)
+function handlePhotoPick(input){
+  const file=input.files&&input.files[0]; if(!file) return;
+  if(!file.type.startsWith("image/")){ toast("Escolha um ficheiro de imagem."); return; }
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const img=new Image();
+    img.onload=()=>{
+      const max=256;
+      const canvas=document.createElement("canvas"); canvas.width=max; canvas.height=max;
+      const ctx=canvas.getContext("2d");
+      // recorte quadrado central da imagem original, redimensionado para 256x256
+      const sw=img.width, sh=img.height, sSide=Math.min(sw,sh);
+      ctx.drawImage(img,(sw-sSide)/2,(sh-sSide)/2,sSide,sSide,0,0,max,max);
+      const dataUrl=canvas.toDataURL("image/jpeg",0.82);
+      window._tmpPhoto=dataUrl;
+      const prev=document.getElementById("mp-photo-prev");
+      if(prev){ prev.style.backgroundImage=`url('${dataUrl}')`; prev.style.backgroundSize="cover"; prev.style.backgroundPosition="center"; prev.textContent=""; }
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function clearPhotoPick(){
+  window._tmpPhoto="";
+  const prev=document.getElementById("mp-photo-prev");
+  if(prev){ prev.style.backgroundImage=""; prev.style.background="#2d5a8c"; const n=document.getElementById("mp-name"); prev.textContent=((n&&n.value)||"?").slice(0,2).toUpperCase(); }
+}
 async function savePerson(id){
   const v=k=>document.getElementById(k).value.trim();
   const name=v("mp-name"); if(!name){toast("Indique o nome.");return;}
-  const data={name,initials:v("mp-initials"),role:v("mp-role"),company:v("mp-company"),area:v("mp-area"),email:v("mp-email"),phone:v("mp-phone"),status:document.getElementById("mp-status").value,notes:v("mp-notes")};
+  const data={name,initials:v("mp-initials"),role:v("mp-role"),company:v("mp-company"),area:v("mp-area"),email:v("mp-email"),phone:v("mp-phone"),status:document.getElementById("mp-status").value,notes:v("mp-notes"),photo:window._tmpPhoto||""};
   if(id){ const u=person(id); const changes=diffPerson(u,data); Object.assign(u,data);
     pushLog("Pessoa · "+name, changes.length?("Editada: "+changes.join("; ")):"Guardada sem alterações.", id); toast("Ficha actualizada."); }
   else { const nu={id:uid("u_"),...data}; people.push(nu);
     pushLog("Pessoa · "+name,"Ficha criada.",nu.id); openPersonId=nu.id; view="people"; toast("Ficha criada."); }
-  closeModal(); render(); persist();
+  window._tmpPhoto=""; closeModal(); render(); persist();
 }
 async function deletePerson(id){
   const u=person(id);
@@ -835,6 +981,7 @@ function diffPerson(o,n){
   const out=[]; for(const k in labels){ let ov=o[k],nv=n[k];
     if(k==="status"){ ov=ESTADOS_PESSOA[ov]||ov; nv=ESTADOS_PESSOA[nv]||nv; }
     if((ov||"")!==(nv||"")) out.push(`${labels[k]}: «${ov||"—"}» → «${nv||"—"}»`); }
+  if((o.photo||"")!==(n.photo||"")) out.push(n.photo?"foto actualizada":"foto removida");
   return out;
 }
 
