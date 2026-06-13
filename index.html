@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
   --ink:#1a2332; --ink-soft:#475069; --line:#dfe3ec; --line-soft:#eef0f5;
@@ -38,9 +39,13 @@ body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:14p
 .sync-badge:hover{background:rgba(255,255,255,.16)}
 .sync-dot{width:8px;height:8px;border-radius:50%;background:#8aa0b6}
 .sync-off .sync-dot{background:#8aa0b6}
-.sync-ok .sync-dot{background:#3ecf8e;box-shadow:0 0 0 3px rgba(62,207,142,.25)}
-.sync-syncing .sync-dot{background:#f5c451;animation:pulse 1s infinite}
+.sync-idle .sync-dot{background:#8aa0b6}
+.sync-ok .sync-dot,.sync-saved .sync-dot{background:#3ecf8e;box-shadow:0 0 0 3px rgba(62,207,142,.25)}
+.sync-syncing .sync-dot,.sync-saving .sync-dot{background:#f5c451;animation:pulse 1s infinite}
 .sync-error .sync-dot{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.25)}
+.role-chip{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;letter-spacing:.3px}
+.role-chip.admin{background:rgba(62,207,142,.18);color:#cfe9dd;border:1px solid rgba(62,207,142,.3)}
+.role-chip.ler{background:rgba(255,255,255,.08);color:#cfe0f0;border:1px solid rgba(255,255,255,.16)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .cloud-steps{counter-reset:step;margin:0 0 4px}
 .cloud-steps li{list-style:none;position:relative;padding:0 0 14px 34px;font-size:13px;color:var(--ink-soft);line-height:1.55}
@@ -253,61 +258,67 @@ tbody tr:hover{background:#fafbfc}
    na nuvem via Gist privado do GitHub. Funciona em qualquer
    dispositivo e offline; sincroniza quando há ligação.
    ============================================================ */
-const SHARED = false;
-const K_PROJ = "tc:projects";
-const K_ACT  = "tc:actions";
-const K_LOG  = "tc:log";
-const K_PPL  = "tc:people";
-const K_CFG  = "tc:cloudcfg";   // {token, gistId} guardado só neste dispositivo
-const K_REV  = "tc:rev";        // carimbo da última gravação (para resolver conflitos)
-const GIST_FILE = "trustcapital_data.json";
-let cloud = { token:"", gistId:"" };   // configuração de nuvem (por dispositivo)
-let syncState = "off";                  // off | ok | syncing | error
-let syncMsg = "Sincronização desligada";
-
 /* ============================================================
-   ACESSO — palavra-passe pedida sempre que a app abre.
-   Guardamos só o "hash" (impressão digital) das credenciais,
-   nunca a password em texto. Para MUDAR as credenciais:
-     1. Defina o novo user/password.
-     2. Gere o novo hash (ver instruções no Guia).
-     3. Substitua o valor de AUTH_HASH abaixo.
-   Credenciais iniciais (MUDE-AS depois):
-     Utilizador:  PRCadmin
-     Palavra-passe: prc2026
+   LIGAÇÃO AO SUPABASE — autenticação real + base de dados.
+   Estas chaves são públicas por natureza (seguras no código).
+   A segurança real está nas regras do servidor (RLS) e no login.
    ============================================================ */
-const AUTH_SALT = "tc_v1_";
-const AUTH_HASH = "8fd8f5b5f7b63e19de6261e85157fa4f74df11db70d06c38fd13cfa560568193";
-async function sha256(txt){
-  const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-async function checkCredentials(user,pass){
-  const h=await sha256(AUTH_SALT+user.trim()+":"+pass);
-  return h===AUTH_HASH;
-}
-function showLogin(){
+const SB_URL = "https://rmvomyjavbrrlxpwaqgj.supabase.co";
+const SB_KEY = "sb_publishable_kmUiUZZsr9ZHLyR-eQ7R8A_UdXI3pRa";
+const DATA_ID = "singleton";           // a linha única partilhada em app_data
+let sb = null;                          // cliente Supabase (criado no arranque)
+let session = null;                     // sessão do utilizador autenticado
+let myRole = "leitura";                 // 'admin' (edita) | 'leitura' (só vê)
+let saveState = "idle";                 // idle | saving | saved | error
+let saveMsg = "";
+function isAdmin(){ return myRole==="admin"; }
+
+function showLogin(errMsg){
   const app=document.getElementById("app");
   app.innerHTML=`<div class="lock"><div class="lock-card">
     <div class="lk-lock">🔒</div>
     <div class="lk-brand">PR Corporation SA</div>
     <div class="lk-sub">Action Plan</div>
-    <div class="lock-err" id="lk-err">Credenciais incorrectas. Tente de novo.</div>
-    <label>Utilizador</label>
-    <input id="lk-user" autocomplete="username" autofocus>
+    <div class="lock-err ${errMsg?'show':''}" id="lk-err">${esc(errMsg||"Credenciais incorrectas. Tente de novo.")}</div>
+    <label>Email</label>
+    <input id="lk-user" type="email" autocomplete="username" autofocus>
     <label>Palavra-passe</label>
     <input id="lk-pass" type="password" autocomplete="current-password">
     <button id="lk-btn">Entrar</button>
   </div></div>`;
   const tryLogin=async()=>{
-    const u=document.getElementById("lk-user").value;
-    const p=document.getElementById("lk-pass").value;
-    if(await checkCredentials(u,p)){ sessionStorage.setItem("tc:auth","1"); boot(); }
-    else { document.getElementById("lk-err").classList.add("show"); document.getElementById("lk-pass").value=""; document.getElementById("lk-pass").focus(); }
+    const email=document.getElementById("lk-user").value.trim();
+    const pass=document.getElementById("lk-pass").value;
+    const btn=document.getElementById("lk-btn");
+    if(!email||!pass){ showErr("Indique email e palavra-passe."); return; }
+    btn.textContent="A entrar…"; btn.disabled=true;
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+    if(error){ showErr(traduzErro(error.message)); btn.textContent="Entrar"; btn.disabled=false; return; }
+    session = data.session;
+    await afterLogin();
   };
+  const showErr=m=>{ const e=document.getElementById("lk-err"); e.textContent=m; e.classList.add("show"); const p=document.getElementById("lk-pass"); if(p){p.value="";p.focus();} };
   document.getElementById("lk-btn").onclick=tryLogin;
   document.getElementById("lk-pass").addEventListener("keydown",e=>{ if(e.key==="Enter") tryLogin(); });
   document.getElementById("lk-user").addEventListener("keydown",e=>{ if(e.key==="Enter") document.getElementById("lk-pass").focus(); });
+}
+function traduzErro(m){
+  if(/invalid login/i.test(m)) return "Email ou palavra-passe incorrectos.";
+  if(/email not confirmed/i.test(m)) return "Conta por confirmar. Contacte o administrador.";
+  return m;
+}
+// Depois de autenticar: descobre o papel (admin/leitura) e arranca a app
+async function afterLogin(){
+  try{
+    const { data } = await sb.from("user_roles").select("role").eq("user_id", session.user.id).maybeSingle();
+    myRole = (data && data.role) ? data.role : "leitura";
+  }catch(e){ myRole="leitura"; }
+  await boot();
+}
+async function doLogout(){
+  try{ await sb.auth.signOut(); }catch(e){}
+  session=null; myRole="leitura";
+  showLogin();
 }
 
 const STATUS = {
@@ -372,37 +383,27 @@ const SEED_ACTIONS = [
 /* ---------- STATE ---------- */
 let projects=[], actions=[], logEntries=[], people=[], view="dashboard", openProjectId=null, openPersonId=null;
 
-/* ---------- STORAGE (local, via localStorage) ---------- */
-function safeGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
-function safeSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
-
+/* ---------- CARREGAR DADOS (do Supabase) ---------- */
 async function loadAll(){
-  // 1) Carrega config de nuvem deste dispositivo
-  try{ const c=safeGet(K_CFG); if(c) cloud=JSON.parse(c); }catch(e){}
-  // 2) Carrega o que houver localmente
-  loadLocal();
-  // 3) Se houver nuvem configurada, tenta puxar a versão mais recente
-  if(cloud.token && cloud.gistId){
-    await cloudPull(true);
-  } else {
-    syncState="off"; syncMsg="Sincronização desligada";
-  }
-}
-function loadLocal(){
   try{
-    const p = safeGet(K_PROJ);
-    if(p){
-      projects=JSON.parse(p); actions=JSON.parse(safeGet(K_ACT)||"[]"); logEntries=JSON.parse(safeGet(K_LOG)||"[]");
-      const pp = safeGet(K_PPL);
-      people = pp ? JSON.parse(pp) : SEED_PEOPLE.slice();
+    const { data, error } = await sb.from("app_data").select("data").eq("id", DATA_ID).maybeSingle();
+    if(error) throw error;
+    const d = (data && data.data) ? data.data : {};
+    if(d && d.projects && d.projects.length){
+      projects = d.projects||[]; actions = d.actions||[]; people = d.people||SEED_PEOPLE.slice(); logEntries = d.logEntries||[];
       migrateActions(); migrateProjects();
-      if(!pp) persistLocal();
-    }
-    else { projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[];
+    } else {
+      // Base vazia (primeira vez): semeia a partir da matriz e grava
+      projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[];
       migrateProjects();
       logEntries.push({ts:new Date().toISOString(),entity:"Sistema",what:"Importação inicial da matriz de Outubro 2025 ("+projects.length+" projectos, "+actions.length+" acções, "+people.length+" pessoas).",refId:""});
-      persistLocal(); }
-  }catch(e){ projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[]; migrateProjects(); }
+      if(isAdmin()) await saveNow();
+    }
+    setSave("idle","");
+  }catch(e){
+    projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[]; migrateProjects();
+    setSave("error","Erro a carregar: "+(e.message||e));
+  }
 }
 // Resolve uma pessoa a partir de um token de texto (iniciais ou nome)
 function personByToken(tok){
@@ -415,116 +416,53 @@ function personByToken(tok){
 }
 // Converte dados antigos (owner/support em texto) para ownerId/supportIds
 function migrateActions(){
-  let changed=false;
   actions.forEach(a=>{
-    if(a.ownerId===undefined){
-      const m=people.find(u=>u.name===a.owner); a.ownerId=m?m.id:""; changed=true; delete a.owner;
-    }
-    if(a.supportIds===undefined){
-      const m=people.find(u=>u.name===a.support); a.supportIds=m?[m.id]:[]; changed=true; delete a.support;
-    }
+    if(a.ownerId===undefined){ const m=people.find(u=>u.name===a.owner); a.ownerId=m?m.id:""; delete a.owner; }
+    if(a.supportIds===undefined){ const m=people.find(u=>u.name===a.support); a.supportIds=m?[m.id]:[]; delete a.support; }
   });
-  return changed;
 }
 // Converte lead/support de texto para leadId + memberIds, preservando só o texto não reconhecido
 function migrateProjects(){
-  let changed=false;
   projects.forEach(p=>{
     if(p.leadId===undefined){
-      changed=true;
       const ids=[]; const unmatched=[];
       const consume=str=>String(str||"").split(/[+\/,]/).map(t=>t.replace(/[()?]/g,"").trim()).filter(t=>t&&t!=="—")
         .forEach(t=>{ const u=personByToken(t); if(u){ if(!ids.includes(u.id)) ids.push(u.id);} else if(!unmatched.includes(t)) unmatched.push(t); });
       consume(p.lead); consume(p.support);
-      p.leadId = ids[0]||"";
-      p.memberIds = ids.slice(1);
-      p.teamNote = unmatched.join(", ");
+      p.leadId = ids[0]||""; p.memberIds = ids.slice(1); p.teamNote = unmatched.join(", ");
       delete p.lead; delete p.support;
     }
   });
-  return changed;
 }
 
-/* ---------- PERSISTÊNCIA (local + nuvem) ---------- */
-function persistLocal(){
-  safeSet(K_PROJ,JSON.stringify(projects));
-  safeSet(K_ACT,JSON.stringify(actions));
-  safeSet(K_PPL,JSON.stringify(people));
-  safeSet(K_LOG,JSON.stringify(logEntries.slice(-500)));
-}
-// Grava localmente e, se houver nuvem, empurra para o Gist (com debounce)
-let pushTimer=null;
+/* ---------- GRAVAR DADOS (no Supabase) ---------- */
+function setSave(state,msg){ saveState=state; saveMsg=msg; updateSyncBadge(); }
+function snapshot(){ return { projects, actions, people, logEntries:logEntries.slice(-500) }; }
+
+// Grava no servidor. Só admins conseguem (o servidor recusa os outros via RLS).
+let saveTimer=null;
 function persist(){
-  const rev=Date.now(); safeSet(K_REV,String(rev));
-  persistLocal();
-  if(cloud.token && cloud.gistId){
-    clearTimeout(pushTimer);
-    pushTimer=setTimeout(()=>cloudPush(rev), 1200); // agrupa gravações próximas
-  }
+  if(!isAdmin()){ return; } // leitura não grava (botões já estão escondidos, isto é a 2ª barreira)
+  clearTimeout(saveTimer);
+  setSave("saving","A guardar…");
+  saveTimer=setTimeout(saveNow, 800); // agrupa gravações próximas
+}
+async function saveNow(){
+  if(!isAdmin()) return;
+  try{
+    const { error } = await sb.from("app_data")
+      .update({ data: snapshot(), updated_at: new Date().toISOString(), updated_by: session?session.user.email:null })
+      .eq("id", DATA_ID);
+    if(error) throw error;
+    setSave("saved","Guardado · "+new Date().toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'}));
+  }catch(e){ setSave("error","Erro ao guardar: "+(e.message||e)); }
 }
 async function pushLog(entity,what,refId){
   logEntries.push({ts:new Date().toISOString(),entity,what,refId});
 }
-
-/* ---------- SINCRONIZAÇÃO COM GIST ---------- */
-function snapshot(){
-  return { rev:Number(safeGet(K_REV)||0), projects, actions, people, logEntries:logEntries.slice(-500) };
-}
-function applySnapshot(d){
-  projects = d.projects||[]; actions = d.actions||[]; people = d.people||[]; logEntries = d.logEntries||[];
-  migrateActions(); migrateProjects(); persistLocal();
-}
-function setSync(state,msg){ syncState=state; syncMsg=msg; updateSyncBadge(); }
-
-async function cloudPull(initial){
-  if(!cloud.token||!cloud.gistId){ setSync("off","Sincronização desligada"); return; }
-  setSync("syncing","A obter da nuvem…");
-  try{
-    const r=await fetch("https://api.github.com/gists/"+cloud.gistId,{
-      headers:{ "Authorization":"Bearer "+cloud.token, "Accept":"application/vnd.github+json" }
-    });
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    const g=await r.json();
-    const f=g.files && g.files[GIST_FILE];
-    if(f && f.content){
-      const remote=JSON.parse(f.content);
-      const localRev=Number(safeGet(K_REV)||0);
-      const remoteRev=Number(remote.rev||0);
-      // A versão mais recente (maior rev) ganha
-      if(remoteRev>=localRev){ applySnapshot(remote); setSync("ok","Sincronizado (nuvem mais recente)"); if(!initial) render(); }
-      else { setSync("ok","Sincronizado (local mais recente)"); await cloudPush(localRev); }
-    } else {
-      // Gist existe mas sem o ficheiro: envia o local
-      await cloudPush(Number(safeGet(K_REV)||Date.now()));
-    }
-  }catch(e){ setSync("error","Erro ao sincronizar: "+e.message); }
-}
-async function cloudPush(rev){
-  if(!cloud.token||!cloud.gistId){ return; }
-  setSync("syncing","A guardar na nuvem…");
-  try{
-    const body={ files:{ [GIST_FILE]:{ content:JSON.stringify(Object.assign(snapshot(),{rev})) } } };
-    const r=await fetch("https://api.github.com/gists/"+cloud.gistId,{
-      method:"PATCH",
-      headers:{ "Authorization":"Bearer "+cloud.token, "Accept":"application/vnd.github+json", "Content-Type":"application/json" },
-      body:JSON.stringify(body)
-    });
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    setSync("ok","Sincronizado · "+new Date().toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'}));
-  }catch(e){ setSync("error","Erro ao guardar: "+e.message); }
-}
-// Cria um Gist novo a partir do estado actual e guarda o id
-async function cloudCreateGist(token){
-  const body={ description:"PR Corporation SA — dados do painel (privado)", public:false,
-    files:{ [GIST_FILE]:{ content:JSON.stringify(Object.assign(snapshot(),{rev:Date.now()})) } } };
-  const r=await fetch("https://api.github.com/gists",{
-    method:"POST",
-    headers:{ "Authorization":"Bearer "+token, "Accept":"application/vnd.github+json", "Content-Type":"application/json" },
-    body:JSON.stringify(body)
-  });
-  if(!r.ok) throw new Error("HTTP "+r.status+" — verifique o token e a permissão 'gist'");
-  const g=await r.json();
-  return g.id;
+// Recarrega do servidor (para ver alterações de outras pessoas)
+async function refreshFromServer(){
+  if(!document.getElementById("overlay")){ await loadAll(); render(); }
 }
 
 /* ---------- DERIVED ---------- */
@@ -577,19 +515,20 @@ function topbar(){
       ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${t("log","Histórico")}${t("reports","Reports")}
     </div>
     <div class="right">
-      <button class="sync-badge sync-${syncState}" data-act="cloud-settings" title="${esc(syncMsg)}"><span class="sync-dot"></span><span id="sync-label">${syncLabel()}</span></button>
-      <button class="btn ghost sm" data-act="new-person">+ Pessoa</button>
-      <button class="btn ghost sm" data-act="new-action">+ Acção</button>
-      <button class="btn ghost sm" data-act="logout" title="Bloquear e sair">Sair</button>
+      <span class="role-chip ${isAdmin()?'admin':'ler'}" title="${isAdmin()?'Pode editar':'Apenas leitura'}">${isAdmin()?'Admin':'Leitura'}</span>
+      <button class="sync-badge sync-${saveState}" data-act="refresh" title="${esc(saveMsg||'Clique para actualizar')}"><span class="sync-dot"></span><span id="sync-label">${syncLabel()}</span></button>
+      ${isAdmin()?`<button class="btn ghost sm" data-act="new-person">+ Pessoa</button>
+      <button class="btn ghost sm" data-act="new-action">+ Acção</button>`:''}
+      <button class="btn ghost sm" data-act="logout" title="Sair da conta">Sair</button>
     </div>
   </div>`;
 }
 function syncLabel(){
-  return syncState==="off"?"Nuvem: desligada":syncState==="ok"?"Sincronizado":syncState==="syncing"?"A sincronizar…":"Erro de sync";
+  return saveState==="saving"?"A guardar…":saveState==="saved"?"Guardado":saveState==="error"?"Erro":isAdmin()?"Pronto":"Só leitura";
 }
 function updateSyncBadge(){
   const b=document.querySelector(".sync-badge"); if(!b) return;
-  b.className="sync-badge sync-"+syncState; b.title=syncMsg;
+  b.className="sync-badge sync-"+saveState; b.title=saveMsg||"Clique para actualizar";
   const l=document.getElementById("sync-label"); if(l) l.textContent=syncLabel();
 }
 
@@ -1105,71 +1044,6 @@ function diff(oldO,newO,isAction){
   return out;
 }
 
-/* ================= MODAL: NUVEM / SINCRONIZAÇÃO ================= */
-function cloudModal(){
-  const connected = !!(cloud.token && cloud.gistId);
-  showModal("Sincronização na nuvem",`
-    <p style="font-size:13px;color:var(--ink-soft);margin-bottom:16px">Sincronize os seus dados entre PC, portátil e telemóvel automaticamente, através de um <b>Gist privado do GitHub</b> (grátis e só seu). Configure uma vez por dispositivo.</p>
-    ${connected?`<div class="cloud-status ok">✓ Ligado. ${esc(syncMsg)}</div>
-      <div class="field" style="margin-top:14px"><label>ID do Gist (igual em todos os dispositivos)</label><input id="cl-gist" value="${esc(cloud.gistId)}" readonly></div>
-      <p style="font-size:12px;color:var(--ink-soft)">Para ligar outro dispositivo: abra lá o painel, clique em Nuvem, escolha <b>"Já tenho um Gist"</b> e cole este ID + um token.</p>`
-    :`<ol class="cloud-steps">
-      <li>Abra <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">github.com/settings/tokens</a> e crie um <b>Fine-grained token</b> (ou clássico). Dê-lhe só a permissão <b>Gists: Read and write</b>.</li>
-      <li>Copie o token (começa por <code>github_pat_</code> ou <code>ghp_</code>) e cole abaixo.</li>
-      <li>Na primeira vez escolha <b>"Criar Gist novo"</b>. Nos outros dispositivos use <b>"Já tenho um Gist"</b> e cole o ID.</li>
-    </ol>
-    <div class="field"><label>Token de acesso do GitHub</label><input id="cl-token" type="password" placeholder="github_pat_… ou ghp_…" value="${esc(cloud.token)}"></div>
-    <div class="field"><label>Modo</label>
-      <select id="cl-mode" onchange="document.getElementById('cl-gistwrap').style.display=this.value==='existing'?'block':'none'">
-        <option value="new">Criar Gist novo (primeiro dispositivo)</option>
-        <option value="existing">Já tenho um Gist (colar ID)</option>
-      </select></div>
-    <div class="field" id="cl-gistwrap" style="display:none"><label>ID do Gist existente</label><input id="cl-gist" placeholder="ex.: 8f3b1c2d4e5f…"></div>
-    <div id="cl-feedback"></div>`}
-  `, connected?[
-    `<button class="btn danger" onclick="cloudDisconnect()">Desligar sincronização</button>`,
-    `<div class="spacer"></div>`,
-    `<button class="btn" data-close>Fechar</button>`,
-    `<button class="btn primary" onclick="cloudPull(false).then(()=>toast('Sincronizado.'))">Sincronizar agora</button>`
-  ]:[
-    `<div class="spacer"></div>`,
-    `<button class="btn" data-close>Cancelar</button>`,
-    `<button class="btn primary" onclick="cloudConnect()">Ligar</button>`
-  ]);
-}
-async function cloudConnect(){
-  const token=document.getElementById("cl-token").value.trim();
-  const mode=document.getElementById("cl-mode").value;
-  const fb=document.getElementById("cl-feedback");
-  if(!token){ fb.innerHTML='<div class="cloud-status err">Indique o token.</div>'; return; }
-  fb.innerHTML='<div class="cloud-status info">A ligar ao GitHub…</div>';
-  try{
-    let gistId;
-    if(mode==="existing"){
-      gistId=document.getElementById("cl-gist").value.trim();
-      if(!gistId){ fb.innerHTML='<div class="cloud-status err">Indique o ID do Gist.</div>'; return; }
-      // valida lendo
-      const r=await fetch("https://api.github.com/gists/"+gistId,{headers:{"Authorization":"Bearer "+token,"Accept":"application/vnd.github+json"}});
-      if(!r.ok) throw new Error("HTTP "+r.status+" — token ou ID inválidos");
-    } else {
-      gistId=await cloudCreateGist(token);
-    }
-    cloud={token,gistId};
-    safeSet(K_CFG,JSON.stringify(cloud));
-    closeModal();
-    await cloudPull(false);
-    render();
-    toast("Sincronização ligada.");
-  }catch(e){ fb.innerHTML='<div class="cloud-status err">Falhou: '+esc(e.message)+'</div>'; }
-}
-function cloudDisconnect(){
-  if(!confirm("Desligar a sincronização neste dispositivo? Os dados locais mantêm-se; deixa só de sincronizar com a nuvem.")) return;
-  cloud={token:"",gistId:""};
-  try{ localStorage.removeItem(K_CFG); }catch(e){}
-  setSync("off","Sincronização desligada");
-  closeModal(); render(); toast("Sincronização desligada.");
-}
-
 /* ================= MODAL PLUMBING ================= */
 function showModal(title,body,footBtns){
   const wide=body.length>1400;
@@ -1304,8 +1178,8 @@ function bindGlobal(){
     if(a==="new-project")projectModal();
     else if(a==="new-action"){if(!projects.length){toast("Crie primeiro um projecto.");return;}actionModal(null,el.getAttribute("data-for"));}
     else if(a==="new-person")personModal();
-    else if(a==="cloud-settings")cloudModal();
-    else if(a==="logout"){ sessionStorage.removeItem("tc:auth"); showLogin(); }
+    else if(a==="refresh")refreshFromServer();
+    else if(a==="logout")doLogout();
     else if(a==="export-xlsx")exportXlsx();
     else if(a==="export-pdf")exportPdf();
   });
@@ -1322,15 +1196,28 @@ function bindRowClicks(){
 
 /* ================= BOOT ================= */
 async function boot(){ await loadAll(); render(); }
-// Pede a palavra-passe sempre que a app abre (sessão nova). Um reload na mesma sessão não volta a pedir.
-(function(){
-  if(sessionStorage.getItem("tc:auth")==="1") boot();
-  else showLogin();
+
+async function startApp(){
+  // Cria o cliente Supabase
+  sb = window.supabase.createClient(SB_URL, SB_KEY);
+  // Já existe sessão activa (ex.: refresh da página)? Entra direto.
+  const { data } = await sb.auth.getSession();
+  if(data && data.session){
+    session = data.session;
+    await afterLogin();
+  } else {
+    showLogin();
+  }
+}
+// Espera a biblioteca do Supabase carregar antes de arrancar
+(function waitForSupabase(){
+  if(window.supabase && window.supabase.createClient) startApp();
+  else setTimeout(waitForSupabase, 60);
 })();
-// Sincronização periódica: a cada 60s verifica se há versão mais recente na nuvem
-setInterval(()=>{ if(cloud.token&&cloud.gistId&&syncState!=="syncing"&&!document.getElementById("overlay")&&sessionStorage.getItem("tc:auth")==="1") cloudPull(false); }, 60000);
-// Ao voltar à app (mudar de separador/dispositivo), sincroniza
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&cloud.token&&cloud.gistId&&!document.getElementById("overlay")&&sessionStorage.getItem("tc:auth")==="1") cloudPull(false); });
+
+// Recarrega do servidor a cada 60s (vê alterações de outras pessoas) e ao voltar ao separador
+setInterval(()=>{ if(session && saveState!=="saving" && !document.getElementById("overlay")) refreshFromServer(); }, 60000);
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden && session && !document.getElementById("overlay")) refreshFromServer(); });
 
 </script>
 </body>
