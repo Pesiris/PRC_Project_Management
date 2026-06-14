@@ -382,6 +382,10 @@ const SEED_ACTIONS = [
 
 /* ---------- STATE ---------- */
 let projects=[], actions=[], logEntries=[], people=[], view="dashboard", openProjectId=null, openPersonId=null;
+let employees=[], openEmpId=null, rhLoaded=false, _tmpContract=null;  // RH: trabalhadores, ficheiro de contrato em edição
+const SAIDA_TIPOS={fim_contrato:"Fim de contrato", pedido:"A pedido do trabalhador", despedimento:"Despedimento"};
+const SEXOS={M:"Masculino", F:"Feminino", outro:"Outro"};
+const ESTADO_CIVIL={solteiro:"Solteiro(a)", casado:"Casado(a)", uniao:"União de facto", divorciado:"Divorciado(a)", viuvo:"Viúvo(a)"};
 
 /* ---------- CARREGAR DADOS (do Supabase) ---------- */
 async function loadAll(){
@@ -465,6 +469,53 @@ async function refreshFromServer(){
   if(!document.getElementById("overlay")){ await loadAll(); render(); }
 }
 
+/* ---------- RH: dados (tabela hr_employees) ---------- */
+async function loadRH(){
+  try{
+    const { data, error } = await sb.from("hr_employees").select("*").order("company").order("name");
+    if(error) throw error;
+    employees = data||[];
+    rhLoaded=true;
+  }catch(e){ employees=[]; rhLoaded=true; toast("RH: erro a carregar — "+(e.message||e)); }
+}
+async function saveEmployee(emp){
+  // emp sem id => insert; com id => update
+  if(emp.id){
+    const { error } = await sb.from("hr_employees").update(emp).eq("id", emp.id);
+    if(error) throw error;
+  } else {
+    const toInsert = Object.assign({}, emp); delete toInsert.id;
+    const { data, error } = await sb.from("hr_employees").insert(toInsert).select().maybeSingle();
+    if(error) throw error;
+    return data;
+  }
+}
+async function deleteEmployee(id){
+  const emp=employees.find(e=>e.id===id);
+  if(emp && emp.contract_path){ try{ await sb.storage.from("contratos").remove([emp.contract_path]); }catch(e){} }
+  const { error } = await sb.from("hr_employees").delete().eq("id", id);
+  if(error) throw error;
+}
+// Upload do PDF do contrato para o Storage; devolve o caminho guardado
+async function uploadContract(file, empKey){
+  const path = empKey+"/"+Date.now()+"_"+file.name.replace(/[^\w.\-]/g,"_");
+  const { error } = await sb.storage.from("contratos").upload(path, file, { upsert:true, contentType:"application/pdf" });
+  if(error) throw error;
+  return path;
+}
+// Gera um link temporário (assinado) para descarregar o contrato
+async function contractUrl(path){
+  const { data, error } = await sb.storage.from("contratos").createSignedUrl(path, 120);
+  if(error) throw error;
+  return data.signedUrl;
+}
+function empCompanies(){
+  const set=[...new Set(employees.map(e=>e.company).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  return set;
+}
+function empAge(dob){ if(!dob) return null; const d=new Date(dob); const t=new Date(); let a=t.getFullYear()-d.getFullYear(); const m=t.getMonth()-d.getMonth(); if(m<0||(m===0&&t.getDate()<d.getDate()))a--; return a; }
+function empActive(e){ return !e.exit_date; }
+
 /* ---------- DERIVED ---------- */
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function isLate(a){ return a.deadline && a.status!=="concluido" && a.deadline < todayISO(); }
@@ -502,6 +553,7 @@ function render(){
     view==="projects"?(openProjectId?renderProjectDetail(openProjectId):renderProjects()):
     view==="actions"?renderActions():
     view==="people"?(openPersonId?renderPersonDetail(openPersonId):renderPeople()):
+    view==="rh"?(isAdmin()?(openEmpId?renderEmpDetail(openEmpId):renderRH()):renderNoAccess()):
     view==="log"?renderLog():
     view==="reports"?renderReports():""
   }</div>`;
@@ -512,7 +564,7 @@ function topbar(){
   return `<div class="topbar">
     <div class="brand"><b>PR Corporation SA</b><span>PRC · Action Plan</span></div>
     <div class="tabs">
-      ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${t("log","Histórico")}${t("reports","Reports")}
+      ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${isAdmin()?t("rh","RH"):''}${t("log","Histórico")}${t("reports","Reports")}
     </div>
     <div class="right">
       <span class="role-chip ${isAdmin()?'admin':'ler'}" title="${isAdmin()?'Pode editar':'Apenas leitura'}">${isAdmin()?'Admin':'Leitura'}</span>
@@ -1044,6 +1096,209 @@ function diff(oldO,newO,isAction){
   return out;
 }
 
+/* ================= RH (Recursos Humanos) ================= */
+function renderNoAccess(){
+  return `<div class="empty-state" style="padding:80px"><h3>Acesso restrito</h3><p>O módulo de RH é visível apenas a administradores.</p></div>`;
+}
+function renderRH(){
+  if(!rhLoaded){ loadRH().then(()=>{ if(view==="rh") render(); }); return `<div class="loading">A carregar RH…</div>`; }
+  const companies=empCompanies();
+  const total=employees.length, active=employees.filter(empActive).length;
+  const body = companies.length ? companies.map(c=>{
+    const list=employees.filter(e=>e.company===c).sort((a,b)=>a.name.localeCompare(b.name));
+    const rows=list.map(e=>`<tr data-open-emp="${e.id}" style="cursor:pointer">
+      <td>${avatarHtml({name:e.name,initials:e.initials,photo:e.photo})}</td>
+      <td><div class="t-title">${esc(e.name)}</div><div class="t-meta">${esc(e.role||'—')}</div></td>
+      <td class="t-meta">${e.hire_date||'—'}</td>
+      <td>${empActive(e)?'<span class="badge b-ok">Activo</span>':'<span class="badge b-idle">Saiu '+(e.exit_date||'')+'</span>'}</td>
+      <td class="t-meta">${e.contract_path?'📎 Sim':'—'}</td>
+    </tr>`).join("");
+    return `<div class="sec"><div class="sec-head"><h2>${esc(c)}</h2><span class="count">${list.length}</span></div>
+      <div class="panel"><table><thead><tr><th style="width:54px"></th><th>Trabalhador</th><th>Contratação</th><th style="width:140px">Estado</th><th style="width:90px">Contrato</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  }).join("") : `<div class="empty-state"><h3>Sem trabalhadores</h3><p>Crie a primeira ficha de RH.</p></div>`;
+  return `<div class="page-head"><div><h1>Recursos Humanos</h1><p>${total} trabalhadores · ${active} activos · ${companies.length} empresas</p></div>
+    <button class="btn primary" data-act="new-emp">+ Novo trabalhador</button></div>
+  ${body}`;
+}
+function renderEmpDetail(id){
+  const e=employees.find(x=>x.id===id); if(!e){view="rh";openEmpId=null;return renderRH();}
+  const kids=(e.children||[]);
+  const fmt=v=>v||'—';
+  return `<div class="page-head"><div>
+      <p style="margin-bottom:4px"><a href="#" data-nav="rh" style="color:var(--brand-2);text-decoration:none;font-size:13px">← RH</a></p>
+    </div><button class="btn" data-edit-emp="${e.id}">Editar ficha</button></div>
+  <div class="person-head">${avatarHtml({name:e.name,initials:e.initials,photo:e.photo},true)}
+    <div><h1 style="font-family:'Fraunces',serif;font-size:26px">${esc(e.name)} ${empActive(e)?'':'<span class="badge b-idle">Saiu</span>'}</h1>
+      <p style="color:var(--ink-soft)">${esc(e.role||'—')} · ${esc(e.company||'—')}</p></div></div>
+
+  <div class="sec"><div class="sec-head"><h2>Dados contratuais</h2></div>
+  <div class="detail-meta">
+    <div class="dm"><div class="l">Empresa</div><div class="v" style="font-size:14px">${fmt(esc(e.company))}</div></div>
+    <div class="dm"><div class="l">Função</div><div class="v" style="font-size:14px">${fmt(esc(e.role))}</div></div>
+    <div class="dm"><div class="l">Data de contratação</div><div class="v" style="font-size:14px">${fmt(e.hire_date)}</div></div>
+    <div class="dm"><div class="l">Duração do contrato</div><div class="v" style="font-size:14px">${fmt(esc(e.contract_duration))}</div></div>
+    <div class="dm"><div class="l">Salário bruto</div><div class="v" style="font-size:14px">${e.salary?esc(e.salary)+' '+esc(e.salary_currency||''):'—'}</div></div>
+    <div class="dm"><div class="l">Contrato (PDF)</div><div class="v" style="font-size:13px">${e.contract_path?`<a href="#" data-dl-contract="${e.id}" style="color:var(--brand-2)">📎 Descarregar</a>`:'—'}</div></div>
+  </div>
+  ${e.benefits?`<div class="panel" style="padding:14px 16px;margin-bottom:20px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:5px">Outros benefícios</div><div style="font-size:13px;white-space:pre-wrap">${esc(e.benefits)}</div></div>`:''}
+  </div>
+
+  ${!empActive(e)?`<div class="sec"><div class="sec-head"><h2>Saída</h2></div>
+    <div class="detail-meta">
+      <div class="dm"><div class="l">Data de saída</div><div class="v" style="font-size:14px">${fmt(e.exit_date)}</div></div>
+      <div class="dm"><div class="l">Tipo</div><div class="v" style="font-size:14px">${fmt(SAIDA_TIPOS[e.exit_type]||e.exit_type)}</div></div>
+      <div class="dm" style="grid-column:span 2"><div class="l">Motivo</div><div class="v" style="font-size:14px">${fmt(esc(e.exit_reason))}</div></div>
+    </div></div>`:''}
+
+  <div class="sec"><div class="sec-head"><h2>Dados pessoais</h2></div>
+  <div class="detail-meta">
+    <div class="dm"><div class="l">Data de nascimento</div><div class="v" style="font-size:14px">${e.dob?esc(e.dob)+(empAge(e.dob)!=null?' ('+empAge(e.dob)+' anos)':''):'—'}</div></div>
+    <div class="dm"><div class="l">Sexo</div><div class="v" style="font-size:14px">${fmt(SEXOS[e.sex]||e.sex)}</div></div>
+    <div class="dm"><div class="l">Estado civil</div><div class="v" style="font-size:14px">${fmt(ESTADO_CIVIL[e.marital]||e.marital)}</div></div>
+    <div class="dm"><div class="l">Nº de filhos</div><div class="v" style="font-size:14px">${e.children&&e.children.length?e.children.length:(e.num_children||0)}</div></div>
+    <div class="dm"><div class="l">Nº INSS</div><div class="v" style="font-size:14px">${fmt(esc(e.inss))}</div></div>
+    <div class="dm"><div class="l">NUIT (contribuinte)</div><div class="v" style="font-size:14px">${fmt(esc(e.nuit))}</div></div>
+  </div>
+  ${kids.length?`<div class="panel" style="padding:14px 16px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:6px">Filhos</div><div style="font-size:13px">${kids.map(k=>esc(k.name||'Filho')+(k.age!=null&&k.age!==''?' ('+esc(k.age)+' anos)':'')).join(' · ')}</div></div>`:''}
+  </div>`;
+}
+
+function empModal(e){
+  const isEdit=!!e; e=e||{salary_currency:"MZN",children:[]};
+  _tmpContract=null; window._empPhoto=e.photo||""; window._empKids=JSON.parse(JSON.stringify(e.children||[]));
+  const opt=(obj,sel)=>Object.entries(obj).map(([k,v])=>`<option value="${k}" ${sel===k?'selected':''}>${v}</option>`).join("");
+  showModal(`${isEdit?"Editar ficha de trabalhador":"Novo trabalhador"}`,`
+    <div style="display:flex;gap:18px;align-items:center;margin-bottom:18px">
+      <div id="emp-photo-prev" class="avatar lg" style="${e.photo?`background-image:url('${e.photo}');background-size:cover;background-position:center`:'background:#2d5a8c'}">${e.photo?'':esc((e.initials||e.name||'?').slice(0,2).toUpperCase())}</div>
+      <div><input type="file" id="emp-photo-file" accept="image/*" style="display:none" onchange="handleEmpPhoto(this)">
+        <button type="button" class="btn sm" onclick="document.getElementById('emp-photo-file').click()">Carregar foto</button>
+        <div class="t-meta" style="margin-top:6px;font-size:11px">Redimensionada automaticamente.</div></div>
+    </div>
+    <h3 style="font-size:13px;font-weight:700;color:var(--brand);margin:6px 0 10px">Dados contratuais</h3>
+    <div class="frow">
+      <div class="field"><label>Nome completo</label><input id="emp-name" value="${esc(e.name||'')}"></div>
+      <div class="field"><label>Empresa</label><input id="emp-company" list="emp-companies" value="${esc(e.company||'')}" placeholder="Ex.: PR Corporation SA"><datalist id="emp-companies">${empCompanies().map(c=>`<option value="${esc(c)}">`).join("")}</datalist></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Função</label><input id="emp-role" value="${esc(e.role||'')}"></div>
+      <div class="field"><label>Iniciais (avatar)</label><input id="emp-initials" value="${esc(e.initials||'')}" placeholder="Ex.: JL"></div>
+    </div>
+    <div class="frow-3">
+      <div class="field"><label>Data de contratação</label><input id="emp-hire" type="date" value="${e.hire_date||''}"></div>
+      <div class="field"><label>Duração do contrato</label><input id="emp-duration" value="${esc(e.contract_duration||'')}" placeholder="Ex.: 12 meses / Sem termo"></div>
+      <div class="field"><label>Salário bruto</label><div style="display:flex;gap:6px"><input id="emp-salary" value="${esc(e.salary||'')}" placeholder="50000" style="flex:1"><input id="emp-currency" value="${esc(e.salary_currency||'MZN')}" style="width:64px"></div></div>
+    </div>
+    <div class="field"><label>Outros benefícios (escreva à mão)</label><textarea id="emp-benefits" placeholder="Ex.: Subsídio de transporte, seguro de saúde, telemóvel...">${esc(e.benefits||'')}</textarea></div>
+    <div class="field"><label>Contrato (PDF)</label>
+      <div style="display:flex;gap:10px;align-items:center">
+        <input type="file" id="emp-contract" accept="application/pdf" onchange="handleContractPick(this)">
+        ${e.contract_path?`<span class="t-meta" id="emp-contract-cur">📎 Contrato já anexado</span>`:'<span class="t-meta" id="emp-contract-cur">Sem contrato</span>'}
+      </div></div>
+
+    <h3 style="font-size:13px;font-weight:700;color:var(--brand);margin:18px 0 10px">Dados pessoais</h3>
+    <div class="frow-3">
+      <div class="field"><label>Data de nascimento</label><input id="emp-dob" type="date" value="${e.dob||''}"></div>
+      <div class="field"><label>Sexo</label><select id="emp-sex"><option value="">—</option>${opt(SEXOS,e.sex)}</select></div>
+      <div class="field"><label>Estado civil</label><select id="emp-marital"><option value="">—</option>${opt(ESTADO_CIVIL,e.marital)}</select></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Nº INSS</label><input id="emp-inss" value="${esc(e.inss||'')}"></div>
+      <div class="field"><label>NUIT (contribuinte)</label><input id="emp-nuit" value="${esc(e.nuit||'')}"></div>
+    </div>
+    <div class="field"><label>Filhos</label>
+      <div id="emp-kids"></div>
+      <button type="button" class="btn xs" onclick="addKidRow()">+ Adicionar filho</button>
+    </div>
+
+    <h3 style="font-size:13px;font-weight:700;color:var(--crit);margin:18px 0 10px">Saída (preencher quando terminar)</h3>
+    <div class="frow-3">
+      <div class="field"><label>Data de saída</label><input id="emp-exit-date" type="date" value="${e.exit_date||''}"></div>
+      <div class="field"><label>Tipo de saída</label><select id="emp-exit-type"><option value="">—</option>${opt(SAIDA_TIPOS,e.exit_type)}</select></div>
+      <div class="field"></div>
+    </div>
+    <div class="field"><label>Motivo da saída</label><textarea id="emp-exit-reason" placeholder="Detalhe do motivo">${esc(e.exit_reason||'')}</textarea></div>
+  `,[
+    isEdit?`<button class="btn danger" onclick="confirmDeleteEmp('${e.id}')">Apagar ficha</button>`:'',
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Cancelar</button>`,
+    `<button class="btn primary" id="emp-save-btn" onclick="submitEmployee('${isEdit?e.id:''}')">${isEdit?'Guardar':'Criar ficha'}</button>`
+  ]);
+  renderKidRows();
+}
+function renderKidRows(){
+  const box=document.getElementById("emp-kids"); if(!box) return;
+  box.innerHTML=(window._empKids||[]).map((k,i)=>`<div style="display:flex;gap:8px;margin-bottom:6px">
+    <input placeholder="Nome" value="${esc(k.name||'')}" oninput="window._empKids[${i}].name=this.value" style="flex:1">
+    <input placeholder="Idade" value="${esc(k.age!=null?k.age:'')}" oninput="window._empKids[${i}].age=this.value" style="width:80px">
+    <button type="button" class="btn xs" onclick="window._empKids.splice(${i},1);renderKidRows()">✕</button>
+  </div>`).join("");
+}
+function addKidRow(){ window._empKids=window._empKids||[]; window._empKids.push({name:"",age:""}); renderKidRows(); }
+function handleEmpPhoto(input){
+  const file=input.files&&input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=ev=>{ const img=new Image(); img.onload=()=>{
+    const max=256, canvas=document.createElement("canvas"); canvas.width=max; canvas.height=max;
+    const ctx=canvas.getContext("2d"); const sw=img.width,sh=img.height,ss=Math.min(sw,sh);
+    ctx.drawImage(img,(sw-ss)/2,(sh-ss)/2,ss,ss,0,0,max,max);
+    window._empPhoto=canvas.toDataURL("image/jpeg",0.82);
+    const p=document.getElementById("emp-photo-prev"); if(p){p.style.backgroundImage=`url('${window._empPhoto}')`;p.style.backgroundSize="cover";p.style.backgroundPosition="center";p.textContent="";}
+  }; img.src=ev.target.result; };
+  reader.readAsDataURL(file);
+}
+function handleContractPick(input){
+  const f=input.files&&input.files[0];
+  if(f && f.type!=="application/pdf"){ toast("O contrato tem de ser PDF."); input.value=""; return; }
+  _tmpContract=f||null;
+  const cur=document.getElementById("emp-contract-cur"); if(cur&&f) cur.textContent="Novo: "+f.name;
+}
+async function submitEmployee(id){
+  const v=k=>{const el=document.getElementById(k);return el?el.value.trim():"";};
+  const name=v("emp-name"); if(!name){toast("Indique o nome.");return;}
+  const company=v("emp-company"); if(!company){toast("Indique a empresa.");return;}
+  const btn=document.getElementById("emp-save-btn"); if(btn){btn.disabled=true;btn.textContent="A guardar…";}
+  const kids=(window._empKids||[]).filter(k=>(k.name&&k.name.trim())||(k.age!==""&&k.age!=null));
+  const emp={
+    name, company, role:v("emp-role"), initials:v("emp-initials"), photo:window._empPhoto||"",
+    hire_date:v("emp-hire")||null, contract_duration:v("emp-duration"),
+    salary:v("emp-salary"), salary_currency:v("emp-currency"), benefits:v("emp-benefits"),
+    dob:v("emp-dob")||null, sex:v("emp-sex"), marital:v("emp-marital"),
+    inss:v("emp-inss"), nuit:v("emp-nuit"), children:kids, num_children:kids.length,
+    exit_date:v("emp-exit-date")||null, exit_type:v("emp-exit-type"), exit_reason:v("emp-exit-reason")
+  };
+  if(id) emp.id=id;
+  try{
+    // 1. Garante uma chave para o ficheiro (usa id existente ou gera um)
+    let savedId=id;
+    if(!id){ const created=await saveEmployee(emp); savedId=created.id; emp.id=savedId; }
+    // 2. Se há contrato novo, faz upload e guarda o caminho
+    if(_tmpContract){
+      const path=await uploadContract(_tmpContract, savedId);
+      emp.contract_path=path;
+      await saveEmployee(emp); // grava o caminho
+    } else if(id){
+      await saveEmployee(emp);
+    }
+    _tmpContract=null;
+    await loadRH();
+    closeModal(); openEmpId=savedId; render(); toast("Ficha guardada.");
+  }catch(err){
+    if(btn){btn.disabled=false;btn.textContent=id?'Guardar':'Criar ficha';}
+    toast("Erro: "+(err.message||err));
+  }
+}
+async function confirmDeleteEmp(id){
+  const e=employees.find(x=>x.id===id);
+  if(!confirm(`Apagar a ficha de ${e.name}? Inclui o contrato anexado. Não pode ser anulado.`)) return;
+  try{ await deleteEmployee(id); await loadRH(); closeModal(); openEmpId=null; view="rh"; render(); toast("Ficha apagada."); }
+  catch(err){ toast("Erro: "+(err.message||err)); }
+}
+async function downloadContract(id){
+  const e=employees.find(x=>x.id===id); if(!e||!e.contract_path) return;
+  try{ const url=await contractUrl(e.contract_path); window.open(url,"_blank"); }
+  catch(err){ toast("Erro ao abrir contrato: "+(err.message||err)); }
+}
+
 /* ================= MODAL PLUMBING ================= */
 function showModal(title,body,footBtns){
   const wide=body.length>1400;
@@ -1172,12 +1427,13 @@ function exportPdf(){
 
 /* ================= EVENT BINDINGS ================= */
 function bindGlobal(){
-  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=e=>{e.preventDefault();view=el.getAttribute("data-nav");openProjectId=null;openPersonId=null;render();});
+  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=e=>{e.preventDefault();view=el.getAttribute("data-nav");openProjectId=null;openPersonId=null;openEmpId=null;render();});
   document.querySelectorAll("[data-act]").forEach(el=>el.onclick=()=>{
     const a=el.getAttribute("data-act");
     if(a==="new-project")projectModal();
     else if(a==="new-action"){if(!projects.length){toast("Crie primeiro um projecto.");return;}actionModal(null,el.getAttribute("data-for"));}
     else if(a==="new-person")personModal();
+    else if(a==="new-emp")empModal();
     else if(a==="refresh")refreshFromServer();
     else if(a==="logout")doLogout();
     else if(a==="export-xlsx")exportXlsx();
@@ -1186,12 +1442,15 @@ function bindGlobal(){
   document.querySelectorAll("[data-edit-project]").forEach(el=>el.onclick=e=>{e.stopPropagation();projectModal(projects.find(p=>p.id===el.getAttribute("data-edit-project")));});
   document.querySelectorAll("[data-edit-action]").forEach(el=>el.onclick=e=>{e.stopPropagation();actionModal(actions.find(a=>a.id===el.getAttribute("data-edit-action")));});
   document.querySelectorAll("[data-edit-person]").forEach(el=>el.onclick=e=>{e.stopPropagation();personModal(person(el.getAttribute("data-edit-person")));});
+  document.querySelectorAll("[data-edit-emp]").forEach(el=>el.onclick=e=>{e.stopPropagation();empModal(employees.find(x=>x.id===el.getAttribute("data-edit-emp")));});
+  document.querySelectorAll("[data-dl-contract]").forEach(el=>el.onclick=e=>{e.preventDefault();e.stopPropagation();downloadContract(el.getAttribute("data-dl-contract"));});
   bindRowClicks();
 }
 function bindRowClicks(){
   document.querySelectorAll("[data-open-project]").forEach(el=>el.onclick=()=>{openProjectId=el.getAttribute("data-open-project");view="projects";render();});
   document.querySelectorAll("[data-open-action]").forEach(el=>el.onclick=()=>{actionModal(actions.find(a=>a.id===el.getAttribute("data-open-action")));});
   document.querySelectorAll("[data-open-person]").forEach(el=>el.onclick=()=>{openPersonId=el.getAttribute("data-open-person");view="people";render();});
+  document.querySelectorAll("[data-open-emp]").forEach(el=>el.onclick=()=>{openEmpId=el.getAttribute("data-open-emp");view="rh";render();});
 }
 
 /* ================= BOOT ================= */
