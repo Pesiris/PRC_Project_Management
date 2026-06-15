@@ -574,6 +574,19 @@ function projLeadName(p){ return personName(p.leadId)||""; }
 function projMemberNames(p){ return (p.memberIds||[]).map(personName).filter(Boolean); }
 function projTeamText(p){ const names=projMemberNames(p); const extra=p.teamNote?[p.teamNote]:[]; return names.concat(extra).join(", "); }
 
+// Normaliza um nome para cruzamento (sem acentos, minúsculas, espaços simples)
+function normName(s){ return (s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim(); }
+// Encontra a Pessoa (dos projectos) que corresponde a um nome de trabalhador de RH
+function personByName(name){
+  const n=normName(name); if(!n) return null;
+  let m=people.find(u=>normName(u.name)===n); if(m) return m;
+  // correspondência aproximada: um nome contém o outro (mínimo 4 caracteres)
+  if(n.length>=4){ m=people.find(u=>{const un=normName(u.name); return un.includes(n)||n.includes(un);}); if(m) return m; }
+  return null;
+}
+// Projectos e acções onde uma Pessoa está envolvida
+function personProjects(uid){ return projects.filter(p=>p.leadId===uid || (p.memberIds||[]).includes(uid)); }
+
 /* ---------- HELPERS ---------- */
 const esc=s=>(s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function statusBadge(a){
@@ -1240,7 +1253,24 @@ function renderEmpDetail(id){
   </div>
   ${(e.address||e.city||e.province)?`<div class="panel" style="padding:14px 16px;margin-bottom:12px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:5px">Morada de residência</div><div style="font-size:13px">${esc([e.address,e.city,e.province].filter(Boolean).join(', ')||'—')}</div></div>`:''}
   ${kids.length?`<div class="panel" style="padding:14px 16px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:6px">Filhos</div><div style="font-size:13px">${kids.map(k=>esc(k.name||'Filho')+(k.age!=null&&k.age!==''?' ('+esc(k.age)+' anos)':'')).join(' · ')}</div></div>`:''}
-  </div>`;
+  </div>
+  ${empInvolvementSection(e)}`;
+}
+// Secção "Envolvimento em projectos" cruzando o nome do trabalhador com as Pessoas dos projectos
+function empInvolvementSection(e){
+  const u=personByName(e.name);
+  if(!u) return `<div class="sec"><div class="sec-head"><h2>Envolvimento em projectos</h2></div><div class="panel"><div class="empty-state" style="padding:24px"><p>Sem correspondência automática nos projectos. ${people.length?'Verifique se o nome coincide com uma ficha de Pessoa.':''}</p></div></div></div>`;
+  const projs=personProjects(u.id);
+  const acts=personActions(u.id);
+  const projRows = projs.length ? projs.map(p=>`<a href="#" data-goto-proj="${p.id}" style="display:inline-block;margin:0 10px 8px 0;color:var(--brand-2);text-decoration:none;font-size:13px">📊 ${esc(p.name)}${p.leadId===u.id?' <span class="t-meta">(Lead)</span>':''}</a>`).join("") : '<span class="t-meta">Nenhum projecto.</span>';
+  const actRows = acts.length ? `<table><thead><tr><th>Acção</th><th>Projecto</th><th>Papel</th><th style="width:180px">Estado</th><th>Prazo</th></tr></thead><tbody>${
+    acts.map(a=>{ const pr=projects.find(p=>p.id===a.projectId); const papel=a.ownerId===u.id?'Responsável':'Apoio';
+      return `<tr data-open-action="${a.id}" style="cursor:pointer"><td class="t-title">${esc(a.title)}</td><td class="t-meta">${esc(pr?pr.name:'—')}</td><td class="t-meta">${papel}</td><td>${statusBadge(a)}</td><td class="t-meta">${a.deadline||'—'}</td></tr>`; }).join("")
+  }</tbody></table>` : '<div class="empty-state" style="padding:24px"><p>Nenhuma acção atribuída.</p></div>';
+  return `<div class="sec"><div class="sec-head"><h2>Envolvimento em projectos</h2><span class="count">${projs.length} proj · ${acts.length} acç</span></div>
+    <div style="font-size:11px;color:var(--ink-soft);margin:-6px 0 10px">Cruzado automaticamente com a ficha de Pessoa «${esc(u.name)}».</div>
+    <div class="panel" style="padding:14px 16px;margin-bottom:12px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:8px">Projectos</div>${projRows}</div>
+    <div class="panel">${actRows}</div></div>`;
 }
 
 function empModal(e){
