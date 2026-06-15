@@ -33,6 +33,10 @@ body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:14p
 .tab{background:none;border:0;color:#bcd0e6;padding:8px 15px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:.15s}
 .tab:hover{background:rgba(255,255,255,.08);color:#fff}
 .tab.on{background:#fff;color:var(--brand);font-weight:600}
+.subbar{background:#fff;border-bottom:1px solid var(--line);padding:0 22px;display:flex;gap:2px;height:44px;align-items:center;position:sticky;top:60px;z-index:39;overflow-x:auto}
+.subtab{background:none;border:0;color:var(--ink-soft);padding:7px 14px;border-radius:var(--r-sm);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:.15s}
+.subtab:hover{background:var(--line-soft);color:var(--ink)}
+.subtab.on{background:var(--brand);color:#fff;font-weight:600}
 .topbar .right{margin-left:auto;display:flex;gap:8px;align-items:center}
 .scope-tag{font-size:11px;color:#a9c0dc;border:1px solid rgba(255,255,255,.2);padding:3px 9px;border-radius:20px}
 .sync-badge{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:600;color:#cfe0f0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:5px 11px;border-radius:20px;cursor:pointer;font-family:inherit;transition:.15s}
@@ -600,21 +604,36 @@ function render(){
   }</div>`;
   bindGlobal();
 }
+// A que grupo de menu pertence cada vista
+function viewGroup(v){
+  if(["dashboard","projects","actions","people","log","reports"].includes(v)) return "g-dash";
+  if(["grupo","externas"].includes(v)) return "g-emp";
+  if(v==="rh") return "g-rh";
+  return "g-dash";
+}
 function topbar(){
-  const t=(id,lab)=>`<button class="tab ${view===id&&!openProjectId&&!openPersonId?'on':''}" data-nav="${id}">${lab}</button>`;
+  const grp=viewGroup(view);
+  // Botões do menu principal (1º nível)
+  const main=(g,id,lab)=>`<button class="tab ${grp===g?'on':''}" data-nav="${id}">${lab}</button>`;
+  // Sub-botões (2º nível), conforme o grupo activo
+  const sub=(id,lab)=>`<button class="subtab ${view===id&&!openProjectId&&!openPersonId&&!openCoId&&!openEmpId?'on':''}" data-nav="${id}">${lab}</button>`;
+  let subbar="";
+  if(grp==="g-dash"){
+    subbar=`${sub("dashboard","Dashboard")}${sub("projects","Projectos")}${sub("actions","Acções")}${sub("people","Pessoas")}${sub("log","Histórico")}${sub("reports","Reports")}`;
+  } else if(grp==="g-emp"){
+    subbar=`${sub("grupo","Grupo")}${sub("externas","Externas")}`;
+  }
   return `<div class="topbar">
     <div class="brand"><b>PR Corporation SA</b><span>PRC · Action Plan</span></div>
     <div class="tabs">
-      ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${t("grupo","Grupo")}${t("externas","Externas")}${isAdmin()?t("rh","RH"):''}${t("log","Histórico")}${t("reports","Reports")}
+      ${main("g-dash","dashboard","Dashboard de Projecto")}${main("g-emp","grupo","Empresas")}${isAdmin()?main("g-rh","rh","RH"):''}
     </div>
     <div class="right">
       <span class="role-chip ${isAdmin()?'admin':'ler'}" title="${isAdmin()?'Pode editar':'Apenas leitura'}">${isAdmin()?'Admin':'Leitura'}</span>
       <button class="sync-badge sync-${saveState}" data-act="refresh" title="${esc(saveMsg||'Clique para actualizar')}"><span class="sync-dot"></span><span id="sync-label">${syncLabel()}</span></button>
-      ${isAdmin()?`<button class="btn ghost sm" data-act="new-person">+ Pessoa</button>
-      <button class="btn ghost sm" data-act="new-action">+ Acção</button>`:''}
       <button class="btn ghost sm" data-act="logout" title="Sair da conta">Sair</button>
     </div>
-  </div>`;
+  </div>${subbar?`<div class="subbar">${subbar}</div>`:''}`;
 }
 function syncLabel(){
   return saveState==="saving"?"A guardar…":saveState==="saved"?"Guardado":saveState==="error"?"Erro":isAdmin()?"Pronto":"Só leitura";
@@ -778,7 +797,7 @@ function renderProjectDetail(pid){
       <button class="btn primary" data-act="new-action" data-for="${p.id}">+ Acção</button></div></div>
   <div class="detail-meta">
     <div class="dm"><div class="l">Lead</div><div class="v">${p.leadId?`<a href="#" data-open-person="${p.leadId}" style="color:var(--brand-2);text-decoration:none">${esc(projLeadName(p))}</a>`:'—'}</div></div>
-    <div class="dm"><div class="l">Equipa</div><div class="v" style="font-size:13px">${projMemberNames(p).length||p.teamNote?esc(projTeamText(p)):'—'}</div></div>
+    <div class="dm"><div class="l">Empresa associada</div><div class="v" style="font-size:13px">${p.companyId&&coById(p.companyId)?`<a href="#" data-goto-co="${p.companyId}" style="color:var(--brand-2);text-decoration:none">🏢 ${esc(coById(p.companyId).name)}</a>`:'—'}</div></div>
     <div class="dm"><div class="l">Progresso</div><div class="v">${prog}%</div></div>
     <div class="dm"><div class="l">Acções</div><div class="v">${as.length}</div></div>
   </div>
@@ -1020,8 +1039,18 @@ function diffPerson(o,n){
 /* ================= MODALS: PROJECT ================= */
 function projectModal(p){
   const isEdit=!!p; p=p||{priority:projects.length+1};
+  // garante empresas carregadas para a lista (não bloqueia; recarrega se vazio)
+  if(!coLoaded){ loadCompanies().then(()=>{ if(document.getElementById("m-name")) {/* já aberto, lista preenchida na próxima abertura */} }); }
+  const allCos=[...grpCompanies,...extCompanies].sort((a,b)=>a.name.localeCompare(b.name));
   showModal(`${isEdit?"Editar projecto":"Novo projecto"}`,`
-    <div class="field"><label>Nome do projecto</label><input id="m-name" value="${esc(p.name||'')}" placeholder="Ex.: Paytek"></div>
+    <div class="field"><label>Nome do projecto</label>
+      <input id="m-name" list="m-co-list" value="${esc(p.name||'')}" placeholder="Escreva ou escolha uma empresa">
+      <datalist id="m-co-list">${allCos.map(c=>`<option value="${esc(c.name)}">${c.kind==='grupo'?'Grupo':'Externa'}</option>`).join("")}</datalist>
+    </div>
+    <div class="field"><label>Empresa associada</label>
+      <select id="m-company"><option value="">— Nenhuma / só projecto —</option>${allCos.map(c=>`<option value="${c.id}" ${p.companyId===c.id?'selected':''}>${esc(c.name)} (${c.kind==='grupo'?'Grupo':'Externa'})</option>`).join("")}</select>
+      <div class="t-meta" style="font-size:11px;margin-top:4px">Liga este projecto à ficha de uma empresa do Grupo ou externa. Se escrever um nome que já é empresa, é sugerida automaticamente.</div>
+    </div>
     <div class="frow">
       <div class="field"><label>Grupo / vertical</label><select id="m-grupo">${GRUPOS.map(g=>`<option ${p.grupo===g?'selected':''}>${g}</option>`).join("")}</select></div>
       <div class="field"><label>Lead (responsável do projecto)</label><select id="m-lead"><option value="">— Sem lead —</option>${activePeople().map(u=>`<option value="${u.id}" ${p.leadId===u.id?'selected':''}>${esc(u.name)}${u.initials?' ('+esc(u.initials)+')':''}</option>`).join("")}</select></div>
@@ -1041,13 +1070,20 @@ function projectModal(p){
     `<button class="btn" data-close>Cancelar</button>`,
     `<button class="btn primary" onclick="saveProject('${isEdit?p.id:''}')">${isEdit?'Guardar alterações':'Criar projecto'}</button>`
   ]);
+  // Quando o nome escrito coincide com uma empresa, sugere a associação automaticamente
+  const nameEl=document.getElementById("m-name"), coEl=document.getElementById("m-company");
+  if(nameEl&&coEl){ nameEl.addEventListener("change",()=>{
+    const match=allCos.find(c=>c.name.toLowerCase()===nameEl.value.trim().toLowerCase());
+    if(match && !coEl.value) coEl.value=match.id;
+  }); }
 }
 async function saveProject(id){
   const v=k=>document.getElementById(k).value.trim();
   const name=v("m-name"); if(!name){toast("Indique o nome do projecto.");return;}
   const memSel=document.getElementById("m-members");
   const memberIds=memSel?Array.from(memSel.selectedOptions).map(o=>o.value):[];
-  const data={name,grupo:document.getElementById("m-grupo").value,priority:+v("m-prio")||null,leadId:document.getElementById("m-lead").value,memberIds,teamNote:v("m-teamnote"),scope:v("m-scope"),notes:v("m-notes")};
+  const companyId=document.getElementById("m-company")?document.getElementById("m-company").value:"";
+  const data={name,grupo:document.getElementById("m-grupo").value,priority:+v("m-prio")||null,leadId:document.getElementById("m-lead").value,memberIds,teamNote:v("m-teamnote"),scope:v("m-scope"),notes:v("m-notes"),companyId:companyId||null};
   if(id){ const p=projects.find(x=>x.id===id); const changes=diffProject(p,data); Object.assign(p,data);
     pushLog("Projecto · "+name, changes.length?("Editado: "+changes.join("; ")):"Guardado sem alterações.", id);
     toast("Projecto actualizado."); }
@@ -1056,10 +1092,11 @@ async function saveProject(id){
   closeModal(); render(); persist();
 }
 function diffProject(o,n){
-  const labels={name:"nome",grupo:"grupo",priority:"prioridade",leadId:"lead",memberIds:"equipa",teamNote:"equipa (texto)",scope:"âmbito",notes:"notas"};
+  const labels={name:"nome",grupo:"grupo",priority:"prioridade",leadId:"lead",memberIds:"equipa",teamNote:"equipa (texto)",scope:"âmbito",notes:"notas",companyId:"empresa associada"};
   const out=[]; for(const k in labels){ let ov=o[k],nv=n[k];
     if(k==="leadId"){ ov=personName(ov); nv=personName(nv); }
     if(k==="memberIds"){ ov=(ov||[]).map(personName).filter(Boolean).join(", "); nv=(nv||[]).map(personName).filter(Boolean).join(", "); }
+    if(k==="companyId"){ const cn=id=>{const c=coById(id);return c?c.name:"";}; ov=cn(ov); nv=cn(nv); }
     if((ov||"")!==(nv||"")) out.push(`${labels[k]}: «${ov||"—"}» → «${nv||"—"}»`); }
   return out;
 }
@@ -1409,6 +1446,7 @@ function renderCoDetail(id, kind){
   </div>
   ${(c.address||c.website)?`<div class="panel" style="padding:14px 16px;margin-bottom:20px">${c.address?`<div class="t-meta"><b>Morada:</b> ${esc(c.address)}</div>`:''}${c.website?`<div class="t-meta"><b>Website:</b> ${esc(c.website)}</div>`:''}</div>`:''}
   ${c.notes?`<div class="panel" style="padding:14px 16px;margin-bottom:20px"><div class="t-meta"><b>Notas:</b> ${esc(c.notes)}</div></div>`:''}
+  ${(()=>{ const linked=projects.filter(p=>p.companyId===c.id); return linked.length?`<div class="panel" style="padding:14px 16px;margin-bottom:20px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:6px">Projecto(s) associado(s)</div>${linked.map(p=>`<a href="#" data-goto-proj="${p.id}" style="color:var(--brand-2);text-decoration:none;font-size:13px;display:inline-block;margin-right:14px">📊 ${esc(p.name)}</a>`).join("")}</div>`:''; })()}
   ${specific}`;
 }
 
@@ -1449,6 +1487,9 @@ function coModal(co, kind){
       <div class="field"><label>Website</label><input id="co-website" value="${esc(co.website||'')}"></div>
     </div>
     <div class="field"><label>Morada (sede)</label><input id="co-address" value="${esc(co.address||'')}"></div>
+    <div class="field"><label>Projecto associado (Dashboard)</label>
+      <select id="co-project"><option value="">— Nenhum —</option>${projects.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.id}" ${(co.id&&p.companyId===co.id)?'selected':''} ${(!isEdit&&co.name&&p.name.toLowerCase()===co.name.toLowerCase())?'selected':''}>${esc(p.name)}</option>`).join("")}</select>
+      <div class="t-meta" style="font-size:11px;margin-top:4px" id="co-proj-hint">Liga esta empresa a um projecto existente no Dashboard.</div></div>
     <div class="field"><label>Notas</label><textarea id="co-notes">${esc(co.notes||'')}</textarea></div>
     ${specific}
   `,[
@@ -1458,6 +1499,13 @@ function coModal(co, kind){
     `<button class="btn primary" id="co-save-btn" onclick="submitCompany('${isEdit?co.id:''}','${isGrp?'grupo':'externa'}')">${isEdit?'Guardar':'Criar'}</button>`
   ]);
   if(isGrp){ renderShareholders(); renderCoDocs(); } else { renderContacts(); }
+  // Sugere projecto com o mesmo nome ao escrever o nome da empresa
+  const coNameEl=document.getElementById("co-name"), coProjEl=document.getElementById("co-project"), hintEl=document.getElementById("co-proj-hint");
+  if(coNameEl&&coProjEl){ coNameEl.addEventListener("input",()=>{
+    const match=projects.find(p=>p.name.toLowerCase()===coNameEl.value.trim().toLowerCase());
+    if(match){ if(!coProjEl.value) coProjEl.value=match.id; if(hintEl) hintEl.innerHTML=`<span style="color:var(--ok)">✓ Existe um projecto "${esc(match.name)}" no Dashboard — sugerido acima.</span>`; }
+    else if(hintEl){ hintEl.textContent="Liga esta empresa a um projecto existente no Dashboard."; }
+  }); }
 }
 function renderShareholders(){
   const box=document.getElementById("co-shareholders"); if(!box) return;
@@ -1535,6 +1583,15 @@ async function submitCompany(id, kind){
       co.docs=finalDocs;
     }
     await saveCompany(co);
+    // Liga/desliga o projecto associado (a relação vive no projecto via companyId)
+    const projSel=document.getElementById("co-project");
+    if(projSel){
+      const chosen=projSel.value;
+      let changed=false;
+      projects.forEach(p=>{ if(p.companyId===savedId && p.id!==chosen){ p.companyId=null; changed=true; } });
+      if(chosen){ const pp=projects.find(p=>p.id===chosen); if(pp && pp.companyId!==savedId){ pp.companyId=savedId; changed=true; } }
+      if(changed) persist();
+    }
     _tmpCoDocs=[]; _tmpShareholders=[]; _tmpContacts=[];
     await loadCompanies();
     closeModal(); openCoId=savedId; view=isGrp?"grupo":"externas"; render(); toast("Empresa guardada.");
@@ -1706,10 +1763,12 @@ function bindRowClicks(){
   document.querySelectorAll("[data-open-person]").forEach(el=>el.onclick=()=>{openPersonId=el.getAttribute("data-open-person");view="people";render();});
   document.querySelectorAll("[data-open-emp]").forEach(el=>el.onclick=()=>{openEmpId=el.getAttribute("data-open-emp");view="rh";render();});
   document.querySelectorAll("[data-open-co]").forEach(el=>el.onclick=()=>{openCoId=el.getAttribute("data-open-co");render();});
+  document.querySelectorAll("[data-goto-co]").forEach(el=>el.onclick=async e=>{e.preventDefault();const id=el.getAttribute("data-goto-co");if(!coLoaded)await loadCompanies();const c=coById(id);openProjectId=null;openCoId=id;view=c&&c.kind==="externa"?"externas":"grupo";render();});
+  document.querySelectorAll("[data-goto-proj]").forEach(el=>el.onclick=e=>{e.preventDefault();openCoId=null;openProjectId=el.getAttribute("data-goto-proj");view="projects";render();});
 }
 
 /* ================= BOOT ================= */
-async function boot(){ await loadAll(); render(); }
+async function boot(){ await loadAll(); loadCompanies().then(()=>render()); render(); }
 
 async function startApp(){
   // Cria o cliente Supabase
