@@ -382,7 +382,10 @@ const SEED_ACTIONS = [
 
 /* ---------- STATE ---------- */
 let projects=[], actions=[], logEntries=[], people=[], view="dashboard", openProjectId=null, openPersonId=null;
-let employees=[], openEmpId=null, rhLoaded=false, _tmpContract=null;  // RH: trabalhadores, ficheiro de contrato em edição
+let employees=[], openEmpId=null, rhLoaded=false, _tmpContract=null;  // RH
+let grpCompanies=[], extCompanies=[], openCoId=null, coLoaded=false, _tmpCoDocs=[], _tmpShareholders=[], _tmpContacts=[];  // Empresas
+const REL_TIPOS={cliente:"Cliente", fornecedor:"Fornecedor", ambos:"Cliente e Fornecedor"};
+const ACC_TIPOS={singular:"Singular", empresa:"Empresa"};
 const SAIDA_TIPOS={fim_contrato:"Fim de contrato", pedido:"A pedido do trabalhador", despedimento:"Despedimento"};
 const SEXOS={M:"Masculino", F:"Feminino", outro:"Outro"};
 const ESTADO_CIVIL={solteiro:"Solteiro(a)", casado:"Casado(a)", uniao:"União de facto", divorciado:"Divorciado(a)", viuvo:"Viúvo(a)"};
@@ -516,6 +519,42 @@ function empCompanies(){
 function empAge(dob){ if(!dob) return null; const d=new Date(dob); const t=new Date(); let a=t.getFullYear()-d.getFullYear(); const m=t.getMonth()-d.getMonth(); if(m<0||(m===0&&t.getDate()<d.getDate()))a--; return a; }
 function empActive(e){ return !e.exit_date; }
 
+/* ---------- EMPRESAS: dados (tabela companies) ---------- */
+async function loadCompanies(){
+  try{
+    const { data, error } = await sb.from("companies").select("*").order("name");
+    if(error) throw error;
+    const all=data||[];
+    grpCompanies=all.filter(c=>c.kind==="grupo");
+    extCompanies=all.filter(c=>c.kind==="externa");
+    coLoaded=true;
+  }catch(e){ grpCompanies=[]; extCompanies=[]; coLoaded=true; toast("Empresas: erro a carregar — "+(e.message||e)); }
+}
+async function saveCompany(co){
+  if(co.id){ const { error } = await sb.from("companies").update(co).eq("id", co.id); if(error) throw error; return {id:co.id}; }
+  const toInsert=Object.assign({},co); delete toInsert.id;
+  const { data, error } = await sb.from("companies").insert(toInsert).select().maybeSingle();
+  if(error) throw error; return data;
+}
+async function deleteCompany(id){
+  const co=[...grpCompanies,...extCompanies].find(c=>c.id===id);
+  if(co && co.docs && co.docs.length){ try{ await sb.storage.from("docs-empresas").remove(co.docs.map(d=>d.path)); }catch(e){} }
+  const { error } = await sb.from("companies").delete().eq("id", id); if(error) throw error;
+}
+async function uploadCompanyDoc(file, coKey){
+  const path=coKey+"/"+Date.now()+"_"+file.name.replace(/[^\w.\-]/g,"_");
+  const { error } = await sb.storage.from("docs-empresas").upload(path, file, { upsert:true });
+  if(error) throw error;
+  return { path, name:file.name, ts:new Date().toISOString() };
+}
+async function companyDocUrl(path){
+  const { data, error } = await sb.storage.from("docs-empresas").createSignedUrl(path, 120);
+  if(error) throw error; return data.signedUrl;
+}
+async function removeCompanyDoc(path){ try{ await sb.storage.from("docs-empresas").remove([path]); }catch(e){} }
+function shareSum(list){ return (list||[]).reduce((s,a)=>s+(parseFloat(a.pct)||0),0); }
+function coById(id){ return [...grpCompanies,...extCompanies].find(c=>c.id===id); }
+
 /* ---------- DERIVED ---------- */
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function isLate(a){ return a.deadline && a.status!=="concluido" && a.deadline < todayISO(); }
@@ -554,6 +593,8 @@ function render(){
     view==="actions"?renderActions():
     view==="people"?(openPersonId?renderPersonDetail(openPersonId):renderPeople()):
     view==="rh"?(isAdmin()?(openEmpId?renderEmpDetail(openEmpId):renderRH()):renderNoAccess()):
+    view==="grupo"?(openCoId?renderCoDetail(openCoId,"grupo"):renderCompanies("grupo")):
+    view==="externas"?(openCoId?renderCoDetail(openCoId,"externa"):renderCompanies("externa")):
     view==="log"?renderLog():
     view==="reports"?renderReports():""
   }</div>`;
@@ -564,7 +605,7 @@ function topbar(){
   return `<div class="topbar">
     <div class="brand"><b>PR Corporation SA</b><span>PRC · Action Plan</span></div>
     <div class="tabs">
-      ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${isAdmin()?t("rh","RH"):''}${t("log","Histórico")}${t("reports","Reports")}
+      ${t("dashboard","Dashboard")}${t("projects","Projectos")}${t("actions","Acções")}${t("people","Pessoas")}${t("grupo","Grupo")}${t("externas","Externas")}${isAdmin()?t("rh","RH"):''}${t("log","Histórico")}${t("reports","Reports")}
     </div>
     <div class="right">
       <span class="role-chip ${isAdmin()?'admin':'ler'}" title="${isAdmin()?'Pode editar':'Apenas leitura'}">${isAdmin()?'Admin':'Leitura'}</span>
@@ -1138,6 +1179,7 @@ function renderEmpDetail(id){
     <div class="dm"><div class="l">Data de contratação</div><div class="v" style="font-size:14px">${fmt(e.hire_date)}</div></div>
     <div class="dm"><div class="l">Duração do contrato</div><div class="v" style="font-size:14px">${fmt(esc(e.contract_duration))}</div></div>
     <div class="dm"><div class="l">Salário bruto</div><div class="v" style="font-size:14px">${e.salary?esc(e.salary)+' '+esc(e.salary_currency||''):'—'}</div></div>
+    <div class="dm"><div class="l">Chefia directa</div><div class="v" style="font-size:14px">${e.manager_id?(()=>{const m=employees.find(x=>x.id===e.manager_id);return m?esc(m.name):'—';})():'—'}</div></div>
     <div class="dm"><div class="l">Contrato (PDF)</div><div class="v" style="font-size:13px">${e.contract_path?`<a href="#" data-dl-contract="${e.id}" style="color:var(--brand-2)">📎 Descarregar</a>`:'—'}</div></div>
   </div>
   ${e.benefits?`<div class="panel" style="padding:14px 16px;margin-bottom:20px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:5px">Outros benefícios</div><div style="font-size:13px;white-space:pre-wrap">${esc(e.benefits)}</div></div>`:''}
@@ -1159,6 +1201,7 @@ function renderEmpDetail(id){
     <div class="dm"><div class="l">Nº INSS</div><div class="v" style="font-size:14px">${fmt(esc(e.inss))}</div></div>
     <div class="dm"><div class="l">NUIT (contribuinte)</div><div class="v" style="font-size:14px">${fmt(esc(e.nuit))}</div></div>
   </div>
+  ${(e.address||e.city||e.province)?`<div class="panel" style="padding:14px 16px;margin-bottom:12px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:5px">Morada de residência</div><div style="font-size:13px">${esc([e.address,e.city,e.province].filter(Boolean).join(', ')||'—')}</div></div>`:''}
   ${kids.length?`<div class="panel" style="padding:14px 16px"><div class="l" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);font-weight:600;margin-bottom:6px">Filhos</div><div style="font-size:13px">${kids.map(k=>esc(k.name||'Filho')+(k.age!=null&&k.age!==''?' ('+esc(k.age)+' anos)':'')).join(' · ')}</div></div>`:''}
   </div>`;
 }
@@ -1189,6 +1232,9 @@ function empModal(e){
       <div class="field"><label>Salário bruto</label><div style="display:flex;gap:6px"><input id="emp-salary" value="${esc(e.salary||'')}" placeholder="50000" style="flex:1"><input id="emp-currency" value="${esc(e.salary_currency||'MZN')}" style="width:64px"></div></div>
     </div>
     <div class="field"><label>Outros benefícios (escreva à mão)</label><textarea id="emp-benefits" placeholder="Ex.: Subsídio de transporte, seguro de saúde, telemóvel...">${esc(e.benefits||'')}</textarea></div>
+    <div class="field"><label>Chefia directa (a quem reporta)</label>
+      <select id="emp-manager"><option value="">— Sem chefia definida —</option>${employees.filter(x=>x.id!==e.id && (!e.company||x.company===e.company)).sort((a,b)=>a.name.localeCompare(b.name)).map(x=>`<option value="${x.id}" ${e.manager_id===x.id?'selected':''}>${esc(x.name)}${x.role?' ('+esc(x.role)+')':''}</option>`).join("")}</select>
+      <div class="t-meta" style="font-size:11px;margin-top:4px">Mostra trabalhadores da mesma empresa.</div></div>
     <div class="field"><label>Contrato (PDF)</label>
       <div style="display:flex;gap:10px;align-items:center">
         <input type="file" id="emp-contract" accept="application/pdf" onchange="handleContractPick(this)">
@@ -1204,6 +1250,11 @@ function empModal(e){
     <div class="frow">
       <div class="field"><label>Nº INSS</label><input id="emp-inss" value="${esc(e.inss||'')}"></div>
       <div class="field"><label>NUIT (contribuinte)</label><input id="emp-nuit" value="${esc(e.nuit||'')}"></div>
+    </div>
+    <div class="field"><label>Morada de residência</label><input id="emp-address" value="${esc(e.address||'')}" placeholder="Rua, bairro, número..."></div>
+    <div class="frow">
+      <div class="field"><label>Cidade</label><input id="emp-city" value="${esc(e.city||'')}"></div>
+      <div class="field"><label>Província</label><input id="emp-province" value="${esc(e.province||'')}"></div>
     </div>
     <div class="field"><label>Filhos</label>
       <div id="emp-kids"></div>
@@ -1262,6 +1313,7 @@ async function submitEmployee(id){
     name, company, role:v("emp-role"), initials:v("emp-initials"), photo:window._empPhoto||"",
     hire_date:v("emp-hire")||null, contract_duration:v("emp-duration"),
     salary:v("emp-salary"), salary_currency:v("emp-currency"), benefits:v("emp-benefits"),
+    manager_id:v("emp-manager")||null, address:v("emp-address"), city:v("emp-city"), province:v("emp-province"),
     dob:v("emp-dob")||null, sex:v("emp-sex"), marital:v("emp-marital"),
     inss:v("emp-inss"), nuit:v("emp-nuit"), children:kids, num_children:kids.length,
     exit_date:v("emp-exit-date")||null, exit_type:v("emp-exit-type"), exit_reason:v("emp-exit-reason")
@@ -1297,6 +1349,205 @@ async function downloadContract(id){
   const e=employees.find(x=>x.id===id); if(!e||!e.contract_path) return;
   try{ const url=await contractUrl(e.contract_path); window.open(url,"_blank"); }
   catch(err){ toast("Erro ao abrir contrato: "+(err.message||err)); }
+}
+
+/* ================= EMPRESAS (Grupo / Externas) ================= */
+function renderCompanies(kind){
+  if(!coLoaded){ loadCompanies().then(()=>{ if(view==="grupo"||view==="externas") render(); }); return `<div class="loading">A carregar empresas…</div>`; }
+  const isGrp = kind==="grupo";
+  const list = (isGrp?grpCompanies:extCompanies).slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const title = isGrp?"Empresas do Grupo":"Empresas Externas";
+  const sub = isGrp?`${list.length} empresas do Grupo`:`${list.length} empresas externas (clientes/fornecedores)`;
+  const cards = list.length ? list.map(c=>{
+    const extra = isGrp
+      ? `${(c.shareholders||[]).length} accionista(s) · ${(c.docs||[]).length} documento(s)`
+      : `${REL_TIPOS[c.relation]||'—'} · ${(c.contacts||[]).length} contacto(s)`;
+    return `<div class="proj-card" data-open-co="${c.id}">
+      <div class="pc-top"><div><h3>${esc(c.name)}</h3><div class="pc-grp">${esc(c.sector||'—')}</div></div></div>
+      <div class="pc-body"><div class="pc-scope">${esc(c.address||'—')}</div>
+        <div class="pc-stats"><span>${c.nuit?'NUIT: '+esc(c.nuit):'—'}</span></div></div>
+      <div class="pc-foot"><span>${esc(extra)}</span></div>
+    </div>`;
+  }).join("") : `<div class="empty-state"><h3>Sem empresas</h3><p>Crie a primeira ${isGrp?'empresa do Grupo':'empresa externa'}.</p></div>`;
+  return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div>
+    ${isAdmin()?`<button class="btn primary" data-act="new-co" data-kind="${kind}">+ Nova empresa</button>`:''}</div>
+  <div class="proj-grid">${cards}</div>`;
+}
+function renderCoDetail(id, kind){
+  const c=coById(id); if(!c){view=kind==="grupo"?"grupo":"externas";openCoId=null;return renderCompanies(kind);}
+  const isGrp = c.kind==="grupo";
+  const back = isGrp?"grupo":"externas";
+  const fmt=v=>v||'—';
+  let specific="";
+  if(isGrp){
+    const sh=c.shareholders||[]; const sum=shareSum(sh);
+    const shRows = sh.length ? `<table><thead><tr><th>Accionista</th><th>Tipo</th><th>NUIT</th><th style="width:90px">%</th></tr></thead><tbody>${
+      sh.map(s=>`<tr><td class="t-title">${esc(s.name)}</td><td class="t-meta">${esc(ACC_TIPOS[s.type]||s.type||'—')}</td><td class="t-meta">${esc(s.nuit||'—')}</td><td>${esc(s.pct||'0')}%</td></tr>`).join("")
+    }<tr><td colspan="3" style="text-align:right;font-weight:600">Total</td><td style="font-weight:700;color:${Math.abs(sum-100)<0.01?'var(--ok)':'var(--warn)'}">${sum}%</td></tr></tbody></table>` : '<div class="empty-state"><p>Sem accionistas registados.</p></div>';
+    const docs=c.docs||[];
+    const docRows = docs.length ? docs.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft)"><span style="font-size:13px">📄 ${esc(d.name)}</span><a href="#" data-dl-codoc="${esc(d.path)}" style="color:var(--brand-2);font-size:12px">Descarregar</a></div>`).join("") : '<div class="empty-state"><p>Sem documentos anexados.</p></div>';
+    specific=`
+      <div class="sec"><div class="sec-head"><h2>Accionistas</h2><span class="count">${sh.length}</span></div><div class="panel">${shRows}</div></div>
+      <div class="sec"><div class="sec-head"><h2>Documentos oficiais</h2><span class="count">${docs.length}</span></div><div class="panel" style="padding:8px 16px">${docRows}</div></div>`;
+  } else {
+    const ct=c.contacts||[];
+    const ctRows = ct.length ? `<table><thead><tr><th>Nome</th><th>Cargo</th><th>Telefone</th><th>Email</th></tr></thead><tbody>${
+      ct.map(p=>`<tr><td class="t-title">${esc(p.name)}</td><td class="t-meta">${esc(p.role||'—')}</td><td class="t-meta">${esc(p.phone||'—')}</td><td class="t-meta">${p.email?`<a href="mailto:${esc(p.email)}">${esc(p.email)}</a>`:'—'}</td></tr>`).join("")
+    }</tbody></table>` : '<div class="empty-state"><p>Sem pessoas de contacto.</p></div>';
+    specific=`<div class="sec"><div class="sec-head"><h2>Pessoas de contacto</h2><span class="count">${ct.length}</span></div><div class="panel">${ctRows}</div></div>`;
+  }
+  return `<div class="page-head"><div>
+      <p style="margin-bottom:4px"><a href="#" data-nav="${back}" style="color:var(--brand-2);text-decoration:none;font-size:13px">← ${isGrp?'Grupo':'Externas'}</a></p>
+      <h1 style="font-family:'Fraunces',serif;font-size:25px">${esc(c.name)}</h1>
+      <p style="color:var(--ink-soft)">${esc(c.sector||'—')}${!isGrp&&c.relation?' · '+REL_TIPOS[c.relation]:''}</p></div>
+    ${isAdmin()?`<button class="btn" data-edit-co="${c.id}">Editar</button>`:''}</div>
+  <div class="detail-meta">
+    <div class="dm"><div class="l">NUIT</div><div class="v" style="font-size:14px">${fmt(esc(c.nuit))}</div></div>
+    ${isGrp?`<div class="dm"><div class="l">Data de constituição</div><div class="v" style="font-size:14px">${fmt(c.founded)}</div></div>`:`<div class="dm"><div class="l">Relação</div><div class="v" style="font-size:14px">${fmt(REL_TIPOS[c.relation])}</div></div>`}
+    <div class="dm"><div class="l">Telefone</div><div class="v" style="font-size:14px">${fmt(esc(c.phone))}</div></div>
+    <div class="dm"><div class="l">Email</div><div class="v" style="font-size:13px">${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:'—'}</div></div>
+  </div>
+  ${(c.address||c.website)?`<div class="panel" style="padding:14px 16px;margin-bottom:20px">${c.address?`<div class="t-meta"><b>Morada:</b> ${esc(c.address)}</div>`:''}${c.website?`<div class="t-meta"><b>Website:</b> ${esc(c.website)}</div>`:''}</div>`:''}
+  ${c.notes?`<div class="panel" style="padding:14px 16px;margin-bottom:20px"><div class="t-meta"><b>Notas:</b> ${esc(c.notes)}</div></div>`:''}
+  ${specific}`;
+}
+
+function coModal(co, kind){
+  const isEdit=!!co;
+  const isGrp = co ? co.kind==="grupo" : kind==="grupo";
+  co=co||{kind:isGrp?"grupo":"externa"};
+  _tmpCoDocs = (co.docs||[]).slice();
+  _tmpShareholders = JSON.parse(JSON.stringify(co.shareholders||[]));
+  _tmpContacts = JSON.parse(JSON.stringify(co.contacts||[]));
+  const opt=(obj,sel)=>Object.entries(obj).map(([k,v])=>`<option value="${k}" ${sel===k?'selected':''}>${v}</option>`).join("");
+  const specific = isGrp ? `
+    <div class="field"><label>Data de constituição</label><input id="co-founded" type="date" value="${co.founded||''}"></div>
+    <h3 style="font-size:13px;font-weight:700;color:var(--brand);margin:16px 0 8px">Accionistas</h3>
+    <div id="co-shareholders"></div>
+    <button type="button" class="btn xs" onclick="addShareholder()">+ Adicionar accionista</button>
+    <div id="co-sh-sum" class="t-meta" style="margin-top:8px"></div>
+    <h3 style="font-size:13px;font-weight:700;color:var(--brand);margin:16px 0 8px">Documentos oficiais (PDF)</h3>
+    <input type="file" id="co-doc-file" accept="application/pdf" onchange="handleCoDocPick(this)">
+    <div id="co-docs-list" style="margin-top:8px"></div>
+  ` : `
+    <div class="field"><label>Relação</label><select id="co-relation"><option value="">—</option>${opt(REL_TIPOS,co.relation)}</select></div>
+    <h3 style="font-size:13px;font-weight:700;color:var(--brand);margin:16px 0 8px">Pessoas de contacto</h3>
+    <div id="co-contacts"></div>
+    <button type="button" class="btn xs" onclick="addContact()">+ Adicionar contacto</button>
+  `;
+  showModal(`${isEdit?"Editar empresa":(isGrp?"Nova empresa do Grupo":"Nova empresa externa")}`,`
+    <div class="frow">
+      <div class="field"><label>Nome / designação social</label><input id="co-name" value="${esc(co.name||'')}"></div>
+      <div class="field"><label>NUIT</label><input id="co-nuit" value="${esc(co.nuit||'')}"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Sector de actividade</label><input id="co-sector" value="${esc(co.sector||'')}"></div>
+      <div class="field"><label>Telefone</label><input id="co-phone" value="${esc(co.phone||'')}"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Email</label><input id="co-email" type="email" value="${esc(co.email||'')}"></div>
+      <div class="field"><label>Website</label><input id="co-website" value="${esc(co.website||'')}"></div>
+    </div>
+    <div class="field"><label>Morada (sede)</label><input id="co-address" value="${esc(co.address||'')}"></div>
+    <div class="field"><label>Notas</label><textarea id="co-notes">${esc(co.notes||'')}</textarea></div>
+    ${specific}
+  `,[
+    isEdit?`<button class="btn danger" onclick="confirmDeleteCo('${co.id}')">Apagar</button>`:'',
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Cancelar</button>`,
+    `<button class="btn primary" id="co-save-btn" onclick="submitCompany('${isEdit?co.id:''}','${isGrp?'grupo':'externa'}')">${isEdit?'Guardar':'Criar'}</button>`
+  ]);
+  if(isGrp){ renderShareholders(); renderCoDocs(); } else { renderContacts(); }
+}
+function renderShareholders(){
+  const box=document.getElementById("co-shareholders"); if(!box) return;
+  box.innerHTML=(_tmpShareholders||[]).map((s,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+    <input placeholder="Nome" value="${esc(s.name||'')}" oninput="_tmpShareholders[${i}].name=this.value" style="flex:2;min-width:120px">
+    <select onchange="_tmpShareholders[${i}].type=this.value" style="width:110px"><option value="">Tipo</option><option value="singular" ${s.type==='singular'?'selected':''}>Singular</option><option value="empresa" ${s.type==='empresa'?'selected':''}>Empresa</option></select>
+    <input placeholder="NUIT" value="${esc(s.nuit||'')}" oninput="_tmpShareholders[${i}].nuit=this.value" style="width:100px">
+    <input placeholder="%" value="${esc(s.pct!=null?s.pct:'')}" oninput="_tmpShareholders[${i}].pct=this.value;updateShareSum()" style="width:60px">
+    <button type="button" class="btn xs" onclick="_tmpShareholders.splice(${i},1);renderShareholders();updateShareSum()">✕</button>
+  </div>`).join("");
+  updateShareSum();
+}
+function addShareholder(){ _tmpShareholders=_tmpShareholders||[]; _tmpShareholders.push({name:"",type:"",nuit:"",pct:""}); renderShareholders(); }
+function updateShareSum(){
+  const el=document.getElementById("co-sh-sum"); if(!el) return;
+  const sum=shareSum(_tmpShareholders);
+  if(Math.abs(sum-100)<0.01){ el.innerHTML=`<span style="color:var(--ok)">Total: ${sum}% ✓</span>`; }
+  else { el.innerHTML=`<span style="color:var(--warn)">⚠ Total: ${sum}% (deve somar 100%)</span>`; }
+}
+function renderContacts(){
+  const box=document.getElementById("co-contacts"); if(!box) return;
+  box.innerHTML=(_tmpContacts||[]).map((p,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+    <input placeholder="Nome" value="${esc(p.name||'')}" oninput="_tmpContacts[${i}].name=this.value" style="flex:1;min-width:110px">
+    <input placeholder="Cargo" value="${esc(p.role||'')}" oninput="_tmpContacts[${i}].role=this.value" style="flex:1;min-width:90px">
+    <input placeholder="Telefone" value="${esc(p.phone||'')}" oninput="_tmpContacts[${i}].phone=this.value" style="width:110px">
+    <input placeholder="Email" value="${esc(p.email||'')}" oninput="_tmpContacts[${i}].email=this.value" style="flex:1;min-width:120px">
+    <button type="button" class="btn xs" onclick="_tmpContacts.splice(${i},1);renderContacts()">✕</button>
+  </div>`).join("");
+}
+function addContact(){ _tmpContacts=_tmpContacts||[]; _tmpContacts.push({name:"",role:"",phone:"",email:""}); renderContacts(); }
+function renderCoDocs(){
+  const box=document.getElementById("co-docs-list"); if(!box) return;
+  box.innerHTML=(_tmpCoDocs||[]).map((d,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line-soft)">
+    <span style="font-size:12px">📄 ${esc(d.name)}${d._new?' (novo)':''}</span>
+    <button type="button" class="btn xs" onclick="removeCoDocRow(${i})">✕</button></div>`).join("");
+}
+function handleCoDocPick(input){
+  const f=input.files&&input.files[0]; if(!f) return;
+  if(f.type!=="application/pdf"){ toast("Os documentos têm de ser PDF."); input.value=""; return; }
+  _tmpCoDocs.push({ name:f.name, _file:f, _new:true });
+  input.value="";
+  renderCoDocs();
+}
+function removeCoDocRow(i){
+  const d=_tmpCoDocs[i];
+  if(d && d.path && !d._new){ d._delete=true; } // marca para apagar do storage ao guardar
+  _tmpCoDocs.splice(i,1); renderCoDocs();
+}
+async function submitCompany(id, kind){
+  const v=k=>{const el=document.getElementById(k);return el?el.value.trim():"";};
+  const name=v("co-name"); if(!name){toast("Indique o nome.");return;}
+  const isGrp = kind==="grupo";
+  const btn=document.getElementById("co-save-btn"); if(btn){btn.disabled=true;btn.textContent="A guardar…";}
+  const co={ kind:isGrp?"grupo":"externa", name, nuit:v("co-nuit"), sector:v("co-sector"),
+    phone:v("co-phone"), email:v("co-email"), website:v("co-website"), address:v("co-address"), notes:v("co-notes") };
+  if(isGrp){
+    co.founded=v("co-founded")||null;
+    co.shareholders=(_tmpShareholders||[]).filter(s=>s.name&&s.name.trim());
+  } else {
+    co.relation=v("co-relation");
+    co.contacts=(_tmpContacts||[]).filter(p=>p.name&&p.name.trim());
+  }
+  if(id) co.id=id;
+  try{
+    let savedId=id;
+    if(!id){ const created=await saveCompany(co); savedId=created.id; co.id=savedId; }
+    if(isGrp){
+      // documentos: upload dos novos, remover marcados, manter os restantes
+      const finalDocs=[];
+      for(const d of _tmpCoDocs){
+        if(d._delete){ await removeCompanyDoc(d.path); continue; }
+        if(d._new && d._file){ const up=await uploadCompanyDoc(d._file, savedId); finalDocs.push(up); }
+        else if(d.path){ finalDocs.push({path:d.path,name:d.name,ts:d.ts}); }
+      }
+      co.docs=finalDocs;
+    }
+    await saveCompany(co);
+    _tmpCoDocs=[]; _tmpShareholders=[]; _tmpContacts=[];
+    await loadCompanies();
+    closeModal(); openCoId=savedId; view=isGrp?"grupo":"externas"; render(); toast("Empresa guardada.");
+  }catch(err){ if(btn){btn.disabled=false;btn.textContent=id?'Guardar':'Criar';} toast("Erro: "+(err.message||err)); }
+}
+async function confirmDeleteCo(id){
+  const c=coById(id); if(!confirm(`Apagar a empresa "${c.name}"? Inclui documentos anexados. Não pode ser anulado.`)) return;
+  try{ await deleteCompany(id); await loadCompanies(); closeModal(); openCoId=null; view=c.kind==="grupo"?"grupo":"externas"; render(); toast("Empresa apagada."); }
+  catch(err){ toast("Erro: "+(err.message||err)); }
+}
+async function downloadCoDoc(path){
+  try{ const url=await companyDocUrl(path); window.open(url,"_blank"); }
+  catch(err){ toast("Erro ao abrir documento: "+(err.message||err)); }
 }
 
 /* ================= MODAL PLUMBING ================= */
@@ -1427,13 +1678,14 @@ function exportPdf(){
 
 /* ================= EVENT BINDINGS ================= */
 function bindGlobal(){
-  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=e=>{e.preventDefault();view=el.getAttribute("data-nav");openProjectId=null;openPersonId=null;openEmpId=null;render();});
+  document.querySelectorAll("[data-nav]").forEach(el=>el.onclick=e=>{e.preventDefault();view=el.getAttribute("data-nav");openProjectId=null;openPersonId=null;openEmpId=null;openCoId=null;render();});
   document.querySelectorAll("[data-act]").forEach(el=>el.onclick=()=>{
     const a=el.getAttribute("data-act");
     if(a==="new-project")projectModal();
     else if(a==="new-action"){if(!projects.length){toast("Crie primeiro um projecto.");return;}actionModal(null,el.getAttribute("data-for"));}
     else if(a==="new-person")personModal();
     else if(a==="new-emp")empModal();
+    else if(a==="new-co")coModal(null, el.getAttribute("data-kind"));
     else if(a==="refresh")refreshFromServer();
     else if(a==="logout")doLogout();
     else if(a==="export-xlsx")exportXlsx();
@@ -1444,6 +1696,8 @@ function bindGlobal(){
   document.querySelectorAll("[data-edit-person]").forEach(el=>el.onclick=e=>{e.stopPropagation();personModal(person(el.getAttribute("data-edit-person")));});
   document.querySelectorAll("[data-edit-emp]").forEach(el=>el.onclick=e=>{e.stopPropagation();empModal(employees.find(x=>x.id===el.getAttribute("data-edit-emp")));});
   document.querySelectorAll("[data-dl-contract]").forEach(el=>el.onclick=e=>{e.preventDefault();e.stopPropagation();downloadContract(el.getAttribute("data-dl-contract"));});
+  document.querySelectorAll("[data-edit-co]").forEach(el=>el.onclick=e=>{e.stopPropagation();coModal(coById(el.getAttribute("data-edit-co")));});
+  document.querySelectorAll("[data-dl-codoc]").forEach(el=>el.onclick=e=>{e.preventDefault();e.stopPropagation();downloadCoDoc(el.getAttribute("data-dl-codoc"));});
   bindRowClicks();
 }
 function bindRowClicks(){
@@ -1451,6 +1705,7 @@ function bindRowClicks(){
   document.querySelectorAll("[data-open-action]").forEach(el=>el.onclick=()=>{actionModal(actions.find(a=>a.id===el.getAttribute("data-open-action")));});
   document.querySelectorAll("[data-open-person]").forEach(el=>el.onclick=()=>{openPersonId=el.getAttribute("data-open-person");view="people";render();});
   document.querySelectorAll("[data-open-emp]").forEach(el=>el.onclick=()=>{openEmpId=el.getAttribute("data-open-emp");view="rh";render();});
+  document.querySelectorAll("[data-open-co]").forEach(el=>el.onclick=()=>{openCoId=el.getAttribute("data-open-co");render();});
 }
 
 /* ================= BOOT ================= */
