@@ -272,10 +272,19 @@ const SB_KEY = "sb_publishable_kmUiUZZsr9ZHLyR-eQ7R8A_UdXI3pRa";
 const DATA_ID = "singleton";           // a linha única partilhada em app_data
 let sb = null;                          // cliente Supabase (criado no arranque)
 let session = null;                     // sessão do utilizador autenticado
-let myRole = "leitura";                 // 'admin' (edita) | 'leitura' (só vê)
+let myRole = "leitura";                 // 'admin' | 'leitura' | '' (perfil por área)
+let myPerms = { projectos:"nenhum", empresas:"nenhum", rh:"nenhum" };
 let saveState = "idle";                 // idle | saving | saved | error
 let saveMsg = "";
 function isAdmin(){ return myRole==="admin"; }
+// Permissão efectiva numa área: admin=editar, leitura=ver, senão o perfil
+function permFor(area){
+  if(myRole==="admin") return "editar";
+  if(myRole==="leitura") return "ver";
+  return myPerms[area]||"nenhum";
+}
+function canView(area){ return permFor(area)==="ver" || permFor(area)==="editar"; }
+function canEdit(area){ return permFor(area)==="editar"; }
 
 function showLogin(errMsg){
   const app=document.getElementById("app");
@@ -311,17 +320,22 @@ function traduzErro(m){
   if(/email not confirmed/i.test(m)) return "Conta por confirmar. Contacte o administrador.";
   return m;
 }
-// Depois de autenticar: descobre o papel (admin/leitura) e arranca a app
+// Depois de autenticar: descobre o papel e as permissões por área
 async function afterLogin(){
   try{
-    const { data } = await sb.from("user_roles").select("role").eq("user_id", session.user.id).maybeSingle();
-    myRole = (data && data.role) ? data.role : "leitura";
-  }catch(e){ myRole="leitura"; }
+    const { data } = await sb.from("user_roles").select("role,perm_projectos,perm_empresas,perm_rh").eq("user_id", session.user.id).maybeSingle();
+    myRole = (data && data.role) ? data.role : "";
+    myPerms = {
+      projectos: (data && data.perm_projectos) || "nenhum",
+      empresas:  (data && data.perm_empresas)  || "nenhum",
+      rh:        (data && data.perm_rh)         || "nenhum"
+    };
+  }catch(e){ myRole=""; myPerms={projectos:"nenhum",empresas:"nenhum",rh:"nenhum"}; }
   await boot();
 }
 async function doLogout(){
   try{ await sb.auth.signOut(); }catch(e){}
-  session=null; myRole="leitura";
+  session=null; myRole="leitura"; myPerms={projectos:"nenhum",empresas:"nenhum",rh:"nenhum"};
   showLogin();
 }
 
@@ -394,25 +408,27 @@ const SAIDA_TIPOS={fim_contrato:"Fim de contrato", pedido:"A pedido do trabalhad
 const SEXOS={M:"Masculino", F:"Feminino", outro:"Outro"};
 const ESTADO_CIVIL={solteiro:"Solteiro(a)", casado:"Casado(a)", uniao:"União de facto", divorciado:"Divorciado(a)", viuvo:"Viúvo(a)"};
 
-/* ---------- CARREGAR DADOS (do Supabase) ---------- */
+/* ---------- CARREGAR DADOS (das tabelas separadas) ---------- */
 async function loadAll(){
   try{
-    const { data, error } = await sb.from("app_data").select("data").eq("id", DATA_ID).maybeSingle();
-    if(error) throw error;
-    const d = (data && data.data) ? data.data : {};
-    if(d && d.projects && d.projects.length){
-      projects = d.projects||[]; actions = d.actions||[]; people = d.people||SEED_PEOPLE.slice(); logEntries = d.logEntries||[];
-      migrateActions(); migrateProjects();
-    } else {
-      // Base vazia (primeira vez): semeia a partir da matriz e grava
-      projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[];
-      migrateProjects();
-      logEntries.push({ts:new Date().toISOString(),entity:"Sistema",what:"Importação inicial da matriz de Outubro 2025 ("+projects.length+" projectos, "+actions.length+" acções, "+people.length+" pessoas).",refId:""});
-      if(isAdmin()) await saveNow();
-    }
+    // Lê em paralelo as tabelas a que o utilizador tem acesso.
+    // Se uma área não for acessível (RLS), devolve vazio sem erro fatal.
+    const [pr, ac, pe, lg] = await Promise.all([
+      sb.from("projects").select("*"),
+      sb.from("actions").select("*"),
+      sb.from("people").select("*"),
+      sb.from("log_entries").select("*").order("id")
+    ]);
+    projects = pr.data||[];
+    actions = ac.data||[];
+    people = pe.data||[];
+    logEntries = (lg.data||[]).map(l=>({ts:l.ts,entity:l.entity,what:l.what,refId:l.refId}));
+    // Ordena projectos por prioridade (como antes)
+    projects.sort((a,b)=>(a.priority||99)-(b.priority||99));
+    snapshotIds();
     setSave("idle","");
   }catch(e){
-    projects=SEED_PROJECTS.slice(); actions=SEED_ACTIONS.slice(); people=SEED_PEOPLE.slice(); logEntries=[]; migrateProjects();
+    projects=[]; actions=[]; people=[]; logEntries=[];
     setSave("error","Erro a carregar: "+(e.message||e));
   }
 }
@@ -446,30 +462,60 @@ function migrateProjects(){
   });
 }
 
-/* ---------- GRAVAR DADOS (no Supabase) ---------- */
+/* ---------- GRAVAR DADOS (nas tabelas separadas) ---------- */
 function setSave(state,msg){ saveState=state; saveMsg=msg; updateSyncBadge(); }
-function snapshot(){ return { projects, actions, people, logEntries:logEntries.slice(-500) }; }
 
-// Grava no servidor. Só admins conseguem (o servidor recusa os outros via RLS).
-let saveTimer=null;
+// Guarda em memória que registos havia, para detectar apagados
+let _lastIds = { projects:new Set(), actions:new Set(), people:new Set() };
+function snapshotIds(){
+  _lastIds = { projects:new Set(projects.map(p=>p.id)), actions:new Set(actions.map(a=>a.id)), people:new Set(people.map(u=>u.id)) };
+}
+
+let saveTimer=null, _pendingLog=[];
 function persist(){
-  if(!isAdmin()){ return; } // leitura não grava (botões já estão escondidos, isto é a 2ª barreira)
+  if(!canEdit("projectos")){ return; } // sem permissão de edição em projectos não grava aqui
   clearTimeout(saveTimer);
   setSave("saving","A guardar…");
-  saveTimer=setTimeout(saveNow, 800); // agrupa gravações próximas
+  saveTimer=setTimeout(saveNow, 800);
 }
+// Limpa um objecto para conter só as colunas da tabela (evita enviar campos a mais)
+function pick(obj, keys){ const o={}; keys.forEach(k=>{ if(obj[k]!==undefined) o[k]=obj[k]; }); return o; }
+const PROJ_COLS=["id","name","grupo","priority","scope","notes","leadId","memberIds","teamNote","companyId"];
+const ACT_COLS=["id","projectId","title","ownerId","supportIds","status","critico","priority","deadline","beginDate","notes"];
+const PPL_COLS=["id","name","initials","role","company","area","email","phone","status","notes","photo"];
+
 async function saveNow(){
-  if(!isAdmin()) return;
+  if(!canEdit("projectos")) return;
   try{
-    const { error } = await sb.from("app_data")
-      .update({ data: snapshot(), updated_at: new Date().toISOString(), updated_by: session?session.user.email:null })
-      .eq("id", DATA_ID);
-    if(error) throw error;
+    // 1. Upsert dos registos actuais
+    const projRows=projects.map(p=>pick(p,PROJ_COLS));
+    const actRows=actions.map(a=>pick(a,ACT_COLS));
+    const pplRows=people.map(u=>pick(u,PPL_COLS));
+    if(projRows.length){ const {error}=await sb.from("projects").upsert(projRows); if(error) throw error; }
+    if(actRows.length){ const {error}=await sb.from("actions").upsert(actRows); if(error) throw error; }
+    if(pplRows.length){ const {error}=await sb.from("people").upsert(pplRows); if(error) throw error; }
+    // 2. Apagar os que foram removidos em memória
+    const delFrom=async(table,curIds,lastSet)=>{
+      const toDel=[...lastSet].filter(id=>!curIds.has(id));
+      if(toDel.length){ const {error}=await sb.from(table).delete().in("id",toDel); if(error) throw error; }
+    };
+    await delFrom("projects", new Set(projects.map(p=>p.id)), _lastIds.projects);
+    await delFrom("actions",  new Set(actions.map(a=>a.id)),  _lastIds.actions);
+    await delFrom("people",   new Set(people.map(u=>u.id)),   _lastIds.people);
+    // 3. Gravar novas entradas de histórico (append)
+    if(_pendingLog.length){
+      const rows=_pendingLog.map(l=>({ts:l.ts,entity:l.entity,what:l.what,refId:l.refId}));
+      const {error}=await sb.from("log_entries").insert(rows);
+      if(!error) _pendingLog=[];
+    }
+    snapshotIds();
     setSave("saved","Guardado · "+new Date().toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'}));
   }catch(e){ setSave("error","Erro ao guardar: "+(e.message||e)); }
 }
 async function pushLog(entity,what,refId){
-  logEntries.push({ts:new Date().toISOString(),entity,what,refId});
+  const entry={ts:new Date().toISOString(),entity,what,refId};
+  logEntries.push(entry);
+  _pendingLog.push(entry);
 }
 // Recarrega do servidor (para ver alterações de outras pessoas)
 async function refreshFromServer(){
@@ -602,20 +648,39 @@ function supportNames(a){ return (a.supportIds||[]).map(personName).filter(Boole
 function ownerSupportText(a){ const o=ownerName(a), s=supportNames(a); return o+(s?(o?" · apoio: ":"apoio: ")+s:""); }
 
 /* ---------- RENDER ROUTER ---------- */
+// Garante que a vista actual é permitida; senão escolhe a primeira permitida
+function ensureAllowedView(){
+  const allowed = {
+    dashboard:canView("projectos"), projects:canView("projectos"), actions:canView("projectos"),
+    people:canView("projectos"), log:canView("projectos"), reports:canView("projectos"),
+    grupo:canView("empresas"), externas:canView("empresas"), rh:canView("rh")
+  };
+  if(allowed[view]) return;
+  // primeira área disponível
+  if(canView("projectos")) view="dashboard";
+  else if(canView("empresas")) view="grupo";
+  else if(canView("rh")) view="rh";
+  else view="__none__";
+}
 function render(){
+  ensureAllowedView();
   const app=document.getElementById("app");
   app.innerHTML = topbar() + `<div class="wrap">${
+    view==="__none__"?renderNoArea():
     view==="dashboard"?renderDashboard():
     view==="projects"?(openProjectId?renderProjectDetail(openProjectId):renderProjects()):
     view==="actions"?renderActions():
     view==="people"?(openPersonId?renderPersonDetail(openPersonId):renderPeople()):
-    view==="rh"?(isAdmin()?(openEmpId?renderEmpDetail(openEmpId):renderRH()):renderNoAccess()):
+    view==="rh"?(canView("rh")?(openEmpId?renderEmpDetail(openEmpId):renderRH()):renderNoAccess()):
     view==="grupo"?(openCoId?renderCoDetail(openCoId,"grupo"):renderCompanies("grupo")):
     view==="externas"?(openCoId?renderCoDetail(openCoId,"externa"):renderCompanies("externa")):
     view==="log"?renderLog():
     view==="reports"?renderReports():""
   }</div>`;
   bindGlobal();
+}
+function renderNoArea(){
+  return `<div class="empty-state" style="padding:80px"><h3>Sem áreas atribuídas</h3><p>A sua conta ainda não tem acesso a nenhuma área. Contacte o administrador.</p></div>`;
 }
 // A que grupo de menu pertence cada vista
 function viewGroup(v){
@@ -626,30 +691,45 @@ function viewGroup(v){
 }
 function topbar(){
   const grp=viewGroup(view);
-  // Botões do menu principal (1º nível)
   const main=(g,id,lab)=>`<button class="tab ${grp===g?'on':''}" data-nav="${id}">${lab}</button>`;
-  // Sub-botões (2º nível), conforme o grupo activo
   const sub=(id,lab)=>`<button class="subtab ${view===id&&!openProjectId&&!openPersonId&&!openCoId&&!openEmpId?'on':''}" data-nav="${id}">${lab}</button>`;
+  // Menu principal: só as áreas que pode ver
+  let mains="";
+  if(canView("projectos")) mains+=main("g-dash","dashboard","Dashboard de Projecto");
+  if(canView("empresas")) mains+=main("g-emp","grupo","Empresas");
+  if(canView("rh")) mains+=main("g-rh","rh","RH");
+  // Submenu conforme o grupo activo
   let subbar="";
-  if(grp==="g-dash"){
+  if(grp==="g-dash" && canView("projectos")){
     subbar=`${sub("dashboard","Dashboard")}${sub("projects","Projectos")}${sub("actions","Acções")}${sub("people","Pessoas")}${sub("log","Histórico")}${sub("reports","Reports")}`;
-  } else if(grp==="g-emp"){
+  } else if(grp==="g-emp" && canView("empresas")){
     subbar=`${sub("grupo","Grupo")}${sub("externas","Externas")}`;
   }
+  // Etiqueta do perfil
+  const roleLabel = isAdmin()?"Admin" : myRole==="leitura"?"Leitura" : "Perfil restrito";
+  const roleCls = isAdmin()?"admin" : "ler";
   return `<div class="topbar">
     <div class="brand"><b>PR Corporation SA</b><span>PRC · Action Plan</span></div>
-    <div class="tabs">
-      ${main("g-dash","dashboard","Dashboard de Projecto")}${main("g-emp","grupo","Empresas")}${isAdmin()?main("g-rh","rh","RH"):''}
-    </div>
+    <div class="tabs">${mains}</div>
     <div class="right">
-      <span class="role-chip ${isAdmin()?'admin':'ler'}" title="${isAdmin()?'Pode editar':'Apenas leitura'}">${isAdmin()?'Admin':'Leitura'}</span>
+      ${isAdmin()?`<button class="btn ghost sm" data-act="profiles" title="Gerir perfis de acesso">Perfis</button>`:''}
+      <span class="role-chip ${roleCls}" title="${esc(permSummary())}">${roleLabel}</span>
       <button class="sync-badge sync-${saveState}" data-act="refresh" title="${esc(saveMsg||'Clique para actualizar')}"><span class="sync-dot"></span><span id="sync-label">${syncLabel()}</span></button>
       <button class="btn ghost sm" data-act="logout" title="Sair da conta">Sair</button>
     </div>
   </div>${subbar?`<div class="subbar">${subbar}</div>`:''}`;
 }
+function permSummary(){
+  if(isAdmin()) return "Acesso total";
+  if(myRole==="leitura") return "Vê tudo, não edita";
+  const parts=[];
+  [["projectos","Projectos"],["empresas","Empresas"],["rh","RH"]].forEach(([k,lab])=>{
+    const p=permFor(k); if(p!=="nenhum") parts.push(lab+": "+(p==="editar"?"editar":"ver"));
+  });
+  return parts.length?parts.join(" · "):"Sem áreas";
+}
 function syncLabel(){
-  return saveState==="saving"?"A guardar…":saveState==="saved"?"Guardado":saveState==="error"?"Erro":isAdmin()?"Pronto":"Só leitura";
+  return saveState==="saving"?"A guardar…":saveState==="saved"?"Guardado":saveState==="error"?"Erro":canEdit("projectos")?"Pronto":"Só leitura";
 }
 function updateSyncBadge(){
   const b=document.querySelector(".sync-badge"); if(!b) return;
@@ -786,7 +866,7 @@ function renderProjects(){
     </div>`;
   }).join("");
   return `<div class="page-head"><div><h1>Projectos</h1><p>${projects.length} projectos ordenados por prioridade do Grupo</p></div>
-    <button class="btn primary" data-act="new-project">+ Novo projecto</button></div>
+    ${canEdit("projectos")?`<button class="btn primary" data-act="new-project">+ Novo projecto</button>`:''}</div>
   <div class="proj-grid">${cards||'<div class="empty-state"><h3>Sem projectos</h3><p>Crie o primeiro projecto para começar.</p></div>'}</div>`;
 }
 
@@ -806,8 +886,7 @@ function renderProjectDetail(pid){
   return `<div class="page-head"><div>
       <p style="margin-bottom:4px"><a href="#" data-nav="projects" style="color:var(--brand-2);text-decoration:none;font-size:13px">← Projectos</a></p>
       <h1>${esc(p.name)}</h1><p>${esc(p.grupo)} · prioridade ${p.priority||'—'}</p></div>
-    <div style="display:flex;gap:8px"><button class="btn" data-edit-project="${p.id}">Editar projecto</button>
-      <button class="btn primary" data-act="new-action" data-for="${p.id}">+ Acção</button></div></div>
+    <div style="display:flex;gap:8px">${canEdit("projectos")?`<button class="btn" data-edit-project="${p.id}">Editar projecto</button><button class="btn primary" data-act="new-action" data-for="${p.id}">+ Acção</button>`:''}</div></div>
   <div class="detail-meta">
     <div class="dm"><div class="l">Lead</div><div class="v">${p.leadId?`<a href="#" data-open-person="${p.leadId}" style="color:var(--brand-2);text-decoration:none">${esc(projLeadName(p))}</a>`:'—'}</div></div>
     <div class="dm"><div class="l">Empresa associada</div><div class="v" style="font-size:13px">${p.companyId&&coById(p.companyId)?`<a href="#" data-goto-co="${p.companyId}" style="color:var(--brand-2);text-decoration:none">🏢 ${esc(coById(p.companyId).name)}</a>`:'—'}</div></div>
@@ -828,7 +907,7 @@ function fmtTs(ts){ const d=new Date(ts); return d.toLocaleString('pt-PT',{day:'
 /* ================= ALL ACTIONS ================= */
 function renderActions(){
   return `<div class="page-head"><div><h1>Acções</h1><p>Todas as acções de todos os projectos</p></div>
-    <button class="btn primary" data-act="new-action">+ Nova acção</button></div>
+    ${canEdit("projectos")?`<button class="btn primary" data-act="new-action">+ Nova acção</button>`:''}</div>
   <div class="toolbar">
     <input type="search" id="f-search" placeholder="Procurar acção…" oninput="applyActionFilters()">
     <select id="f-status" onchange="applyActionFilters()"><option value="">Todos os estados</option>${Object.entries(STATUS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("")}</select>
@@ -915,7 +994,7 @@ function renderPeople(){
       </div></div>`;
   }).join("");
   return `<div class="page-head"><div><h1>Pessoas</h1><p>${people.length} fichas · ${active} activas</p></div>
-    <button class="btn primary" data-act="new-person">+ Nova pessoa</button></div>
+    ${canEdit("projectos")?`<button class="btn primary" data-act="new-person">+ Nova pessoa</button>`:''}</div>
   <div class="people-grid">${cards||'<div class="empty-state"><h3>Sem pessoas</h3><p>Crie a primeira ficha de trabalhador.</p></div>'}</div>`;
 }
 function renderPersonDetail(uid){
@@ -930,7 +1009,7 @@ function renderPersonDetail(uid){
   const tbl=(arr,empty)=>arr.length?`<table><thead><tr><th style="width:48px">Pri</th><th>Acção</th><th style="width:220px">Estado</th><th>Prazo</th></tr></thead><tbody>${arr.map(aRow).join("")}</tbody></table>`:`<div class="empty-state"><p>${empty}</p></div>`;
   return `<div class="page-head"><div>
       <p style="margin-bottom:4px"><a href="#" data-nav="people" style="color:var(--brand-2);text-decoration:none;font-size:13px">← Pessoas</a></p>
-    </div><button class="btn" data-edit-person="${u.id}">Editar ficha</button></div>
+    </div>${canEdit("projectos")?`<button class="btn" data-edit-person="${u.id}">Editar ficha</button>`:''}</div>
   <div class="person-head">${avatarHtml(u,true)}
     <div><h1 style="font-family:'Fraunces',serif;font-size:26px">${esc(u.name)} ${u.status==='inativo'?'<span class="badge b-idle">Inactivo</span>':''}</h1>
       <p style="color:var(--ink-soft)">${esc(u.role||'Função por definir')}${u.company?' · '+esc(u.company):''}</p></div></div>
@@ -1208,7 +1287,7 @@ function renderRH(){
       <div class="panel"><table><thead><tr><th style="width:54px"></th><th>Trabalhador</th><th>Contratação</th><th style="width:140px">Estado</th><th style="width:90px">Contrato</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join("") : `<div class="empty-state"><h3>Sem trabalhadores</h3><p>Crie a primeira ficha de RH.</p></div>`;
   return `<div class="page-head"><div><h1>Recursos Humanos</h1><p>${total} trabalhadores · ${active} activos · ${companies.length} empresas</p></div>
-    <button class="btn primary" data-act="new-emp">+ Novo trabalhador</button></div>
+    ${canEdit("rh")?`<button class="btn primary" data-act="new-emp">+ Novo trabalhador</button>`:''}</div>
   ${body}`;
 }
 function renderEmpDetail(id){
@@ -1217,7 +1296,7 @@ function renderEmpDetail(id){
   const fmt=v=>v||'—';
   return `<div class="page-head"><div>
       <p style="margin-bottom:4px"><a href="#" data-nav="rh" style="color:var(--brand-2);text-decoration:none;font-size:13px">← RH</a></p>
-    </div><button class="btn" data-edit-emp="${e.id}">Editar ficha</button></div>
+    </div>${canEdit("rh")?`<button class="btn" data-edit-emp="${e.id}">Editar ficha</button>`:''}</div>
   <div class="person-head">${avatarHtml({name:e.name,initials:e.initials,photo:e.photo},true)}
     <div><h1 style="font-family:'Fraunces',serif;font-size:26px">${esc(e.name)} ${empActive(e)?'':'<span class="badge b-idle">Saiu</span>'}</h1>
       <p style="color:var(--ink-soft)">${esc(e.role||'—')} · ${esc(e.company||'—')}</p></div></div>
@@ -1437,7 +1516,7 @@ function renderCompanies(kind){
     </div>`;
   }).join("") : `<div class="empty-state"><h3>Sem empresas</h3><p>Crie a primeira ${isGrp?'empresa do Grupo':'empresa externa'}.</p></div>`;
   return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div>
-    ${isAdmin()?`<button class="btn primary" data-act="new-co" data-kind="${kind}">+ Nova empresa</button>`:''}</div>
+    ${canEdit("empresas")?`<button class="btn primary" data-act="new-co" data-kind="${kind}">+ Nova empresa</button>`:''}</div>
   <div class="proj-grid">${cards}</div>`;
 }
 function renderCoDetail(id, kind){
@@ -1467,7 +1546,7 @@ function renderCoDetail(id, kind){
       <p style="margin-bottom:4px"><a href="#" data-nav="${back}" style="color:var(--brand-2);text-decoration:none;font-size:13px">← ${isGrp?'Grupo':'Externas'}</a></p>
       <h1 style="font-family:'Fraunces',serif;font-size:25px">${esc(c.name)}</h1>
       <p style="color:var(--ink-soft)">${esc(c.sector||'—')}${!isGrp&&c.relation?' · '+REL_TIPOS[c.relation]:''}</p></div>
-    ${isAdmin()?`<button class="btn" data-edit-co="${c.id}">Editar</button>`:''}</div>
+    ${canEdit("empresas")?`<button class="btn" data-edit-co="${c.id}">Editar</button>`:''}</div>
   <div class="detail-meta">
     <div class="dm"><div class="l">NUIT</div><div class="v" style="font-size:14px">${fmt(esc(c.nuit))}</div></div>
     ${isGrp?`<div class="dm"><div class="l">Data de constituição</div><div class="v" style="font-size:14px">${fmt(c.founded)}</div></div>`:`<div class="dm"><div class="l">Relação</div><div class="v" style="font-size:14px">${fmt(REL_TIPOS[c.relation])}</div></div>`}
@@ -1637,6 +1716,72 @@ async function downloadCoDoc(path){
   catch(err){ toast("Erro ao abrir documento: "+(err.message||err)); }
 }
 
+/* ================= GESTÃO DE PERFIS (admin) ================= */
+async function profilesModal(){
+  if(!isAdmin()) return;
+  showModal("Gestão de perfis de acesso", `<div id="prof-body"><div class="loading">A carregar utilizadores…</div></div>`, [
+    `<div class="spacer"></div>`,
+    `<button class="btn" data-close>Fechar</button>`
+  ]);
+  try{
+    const { data, error } = await sb.rpc("list_user_profiles");
+    if(error) throw error;
+    renderProfiles(data||[]);
+  }catch(e){
+    const b=document.getElementById("prof-body");
+    if(b) b.innerHTML=`<div class="cloud-status err">Erro a carregar perfis: ${esc(e.message||e)}.<br>Confirme que correu o SQL da função <b>list_user_profiles</b>.</div>`;
+  }
+}
+function permSelect(uid, area, cur){
+  return `<select data-pu="${uid}" data-pa="${area}" style="font-size:12px;padding:4px 6px">
+    <option value="nenhum" ${cur==='nenhum'?'selected':''}>Nenhum</option>
+    <option value="ver" ${cur==='ver'?'selected':''}>Ver</option>
+    <option value="editar" ${cur==='editar'?'selected':''}>Editar</option>
+  </select>`;
+}
+function renderProfiles(users){
+  const b=document.getElementById("prof-body"); if(!b) return;
+  const rows=users.map(u=>{
+    const isMe = session && u.user_id===session.user.id;
+    const roleSel=`<select data-ru="${u.user_id}" style="font-size:12px;padding:4px 6px">
+      <option value="admin" ${u.role==='admin'?'selected':''}>Admin (tudo)</option>
+      <option value="leitura" ${u.role==='leitura'?'selected':''}>Leitura (vê tudo)</option>
+      <option value="perfil" ${(u.role!=='admin'&&u.role!=='leitura')?'selected':''}>Perfil por área</option>
+    </select>`;
+    return `<tr>
+      <td><div class="t-title" style="font-size:13px">${esc(u.email||'—')}</div>${isMe?'<div class="t-meta">(você)</div>':''}</td>
+      <td>${roleSel}</td>
+      <td>${permSelect(u.user_id,'projectos',u.perm_projectos)}</td>
+      <td>${permSelect(u.user_id,'empresas',u.perm_empresas)}</td>
+      <td>${permSelect(u.user_id,'rh',u.perm_rh)}</td>
+      <td><button class="btn xs" data-save-prof="${u.user_id}" ${isMe?'disabled title="Não pode alterar o seu próprio acesso aqui"':''}>Guardar</button></td>
+    </tr>`;
+  }).join("");
+  b.innerHTML=`
+    <p style="font-size:12px;color:var(--ink-soft);margin-bottom:12px">Defina o acesso de cada conta. <b>Admin</b> vê e edita tudo. <b>Leitura</b> vê tudo sem editar. <b>Perfil por área</b> usa as colunas Projectos / Empresas / RH (Nenhum, Ver, Editar). As permissões por área só se aplicam quando o papel é "Perfil por área".</p>
+    <div class="panel"><table><thead><tr><th>Utilizador</th><th>Papel</th><th>Projectos</th><th>Empresas</th><th>RH</th><th></th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="6">Nenhum utilizador.</td></tr>'}</tbody></table></div>
+    <div id="prof-msg" class="msg" style="margin-top:10px"></div>`;
+  b.querySelectorAll("[data-save-prof]").forEach(btn=>btn.onclick=()=>saveProfile(btn.getAttribute("data-save-prof")));
+}
+async function saveProfile(uid){
+  const b=document.getElementById("prof-body");
+  const roleSel=b.querySelector(`[data-ru="${uid}"]`);
+  let role=roleSel.value;
+  // "perfil" guarda-se como role vazio/neutro (não admin, não leitura)
+  const roleVal = role==="admin"?"admin" : role==="leitura"?"leitura" : "perfil";
+  const get=area=>b.querySelector(`[data-pu="${uid}"][data-pa="${area}"]`).value;
+  const payload={ p_user_id:uid, p_role:roleVal,
+    p_projectos:get("projectos"), p_empresas:get("empresas"), p_rh:get("rh") };
+  const msg=document.getElementById("prof-msg");
+  msg.className="msg show info"; msg.textContent="A guardar…";
+  try{
+    const { error } = await sb.rpc("set_user_profile", payload);
+    if(error) throw error;
+    msg.className="msg show ok"; msg.textContent="Perfil guardado.";
+  }catch(e){ msg.className="msg show err"; msg.textContent="Erro: "+(e.message||e); }
+}
+
 /* ================= MODAL PLUMBING ================= */
 function showModal(title,body,footBtns){
   const wide=body.length>1400;
@@ -1775,6 +1920,7 @@ function bindGlobal(){
     else if(a==="new-co")coModal(null, el.getAttribute("data-kind"));
     else if(a==="refresh")refreshFromServer();
     else if(a==="logout")doLogout();
+    else if(a==="profiles")profilesModal();
     else if(a==="export-xlsx")exportXlsx();
     else if(a==="export-pdf")exportPdf();
   });
