@@ -125,6 +125,10 @@ tbody tr:hover{background:#fafbfc}
 /* ---- Project grid ---- */
 .proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px}
 .proj-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden;cursor:pointer;transition:.15s}
+.proj-card.reordering{cursor:grab;border-color:var(--brand-2);border-style:dashed}
+.proj-card.reordering:active{cursor:grabbing}
+.proj-card.dragging{opacity:.5;transform:scale(.97)}
+.drag-handle{background:var(--brand);color:#fff;font-size:11px;font-weight:600;padding:5px 12px;text-align:center;letter-spacing:.3px}
 .proj-card:hover{border-color:#c2c9d6;transform:translateY(-1px);box-shadow:0 4px 18px rgba(20,30,50,.1)}
 .proj-card .pc-top{padding:14px 16px;border-bottom:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 .proj-card h3{font-size:16px;font-weight:600}
@@ -221,7 +225,16 @@ tbody tr:hover{background:#fafbfc}
 .g-body{position:relative;max-height:340px;overflow-y:auto}
 .g-row{display:flex;align-items:center;height:30px;border-bottom:1px solid var(--line-soft)}
 .g-row:hover{background:#fafbfc}
-.g-lab{width:220px;flex:none;padding:0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid var(--line);font-size:12px}
+.g-lab{width:220px;flex:none;padding:0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid var(--line);font-size:12px;display:flex;align-items:center;gap:5px}
+.g-caret{cursor:pointer;color:var(--brand-2);font-size:10px;width:12px;flex:none;user-select:none}
+.g-caret-spacer{width:12px;flex:none}
+.g-projname{cursor:pointer;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
+.g-projname:hover{color:var(--brand-2)}
+.g-goto{margin-left:auto;cursor:pointer;color:var(--brand-2);font-weight:700;padding:0 4px;flex:none;text-decoration:none}
+.g-goto:hover{background:var(--line-soft);border-radius:4px}
+.gantt-full .g-body{max-height:none}
+.gantt-full .g-bar{height:18px}
+.gantt-full .g-row{height:38px}
 .g-lab.proj{font-weight:700;color:var(--ink)}
 .g-lab.act{padding-left:24px;color:var(--ink-soft)}
 .g-dot.proj{display:inline-block;width:7px;height:7px;border-radius:2px;background:var(--brand);margin-right:7px;vertical-align:middle}
@@ -349,7 +362,14 @@ const STATUS = {
   bloqueado:{label:"Bloqueado",cls:"b-block"},
   concluido:{label:"Concluído",cls:"b-ok"},
 };
-const GRUPOS = ["O&G","Industria","Renewable","Fuel","Logistics","Boroma & Lupata","Mining","IT & Financial Services"];
+const GRUPOS_BASE = ["O&G","Industria","Renewable","Fuel","Logistics","Boroma & Lupata","Mining","IT & Financial Services"];
+let customVerticals = [];  // verticais adicionadas pelo utilizador (persistidas em app_settings)
+// Lista completa de verticais: base + personalizadas + as já usadas em projectos
+function allVerticals(){
+  const used = projects.map(p=>p.grupo).filter(Boolean);
+  return [...new Set([...GRUPOS_BASE, ...customVerticals, ...used])];
+}
+const GRUPOS = GRUPOS_BASE; // compatibilidade com código existente
 const ESTADOS_PESSOA = {ativo:"Activo", inativo:"Inactivo"};
 
 /* ---------- SEED PESSOAS (a partir da matriz) ---------- */
@@ -406,6 +426,7 @@ const SEED_ACTIONS = [
 let projects=[], actions=[], logEntries=[], people=[], view="dashboard", openProjectId=null, openPersonId=null;
 let employees=[], openEmpId=null, rhLoaded=false, _tmpContract=null;  // RH
 let grpCompanies=[], extCompanies=[], openCoId=null, coLoaded=false, _tmpCoDocs=[], _tmpShareholders=[], _tmpContacts=[];  // Empresas
+let reorderMode=false;  // modo de reordenação de projectos
 const REL_TIPOS={cliente:"Cliente", fornecedor:"Fornecedor", ambos:"Cliente e Fornecedor"};
 const ACC_TIPOS={singular:"Singular", empresa:"Empresa"};
 const SAIDA_TIPOS={fim_contrato:"Fim de contrato", pedido:"A pedido do trabalhador", despedimento:"Despedimento"};
@@ -609,6 +630,20 @@ async function removeCompanyDoc(path){ try{ await sb.storage.from("docs-empresas
 function shareSum(list){ return (list||[]).reduce((s,a)=>s+(parseFloat(a.pct)||0),0); }
 function coById(id){ return [...grpCompanies,...extCompanies].find(c=>c.id===id); }
 
+/* ---------- DEFINIÇÕES (verticais personalizadas, etc.) ---------- */
+async function loadSettings(){
+  try{
+    const { data } = await sb.from("app_data").select("data").eq("id","settings").maybeSingle();
+    const s = (data && data.data) ? data.data : {};
+    customVerticals = s.customVerticals || [];
+  }catch(e){ customVerticals = []; }
+}
+async function saveSettings(){
+  if(!canEdit("projectos")) return;
+  try{
+    await sb.from("app_data").upsert({ id:"settings", data:{ customVerticals }, updated_at:new Date().toISOString() });
+  }catch(e){}
+}
 /* ---------- DERIVED ---------- */
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function isLate(a){ return a.deadline && a.status!=="concluido" && a.deadline < todayISO(); }
@@ -656,7 +691,7 @@ function ownerSupportText(a){ const o=ownerName(a), s=supportNames(a); return o+
 function ensureAllowedView(){
   const allowed = {
     dashboard:canView("projectos"), projects:canView("projectos"), actions:canView("projectos"),
-    people:canView("projectos"), log:canView("projectos"), reports:canView("projectos"),
+    people:canView("projectos"), log:canView("projectos"), reports:canView("projectos"), gantt:canView("projectos"),
     grupo:canView("empresas"), externas:canView("empresas"), rh:canView("rh")
   };
   if(allowed[view]) return;
@@ -679,7 +714,8 @@ function render(){
     view==="grupo"?(openCoId?renderCoDetail(openCoId,"grupo"):renderCompanies("grupo")):
     view==="externas"?(openCoId?renderCoDetail(openCoId,"externa"):renderCompanies("externa")):
     view==="log"?renderLog():
-    view==="reports"?renderReports():""
+    view==="reports"?renderReports():
+    view==="gantt"?renderGanttFull():""
   }</div>`;
   bindGlobal();
 }
@@ -688,7 +724,7 @@ function renderNoArea(){
 }
 // A que grupo de menu pertence cada vista
 function viewGroup(v){
-  if(["dashboard","projects","actions","people","log","reports"].includes(v)) return "g-dash";
+  if(["dashboard","projects","actions","people","log","reports","gantt"].includes(v)) return "g-dash";
   if(["grupo","externas"].includes(v)) return "g-emp";
   if(v==="rh") return "g-rh";
   return "g-dash";
@@ -777,45 +813,68 @@ function renderDashboard(){
   ${section("Terminadas recentemente", done.slice(-6).reverse(), "Ainda nenhuma acção concluída.")}`;
 }
 
-/* ================= CRONOGRAMA (GANTT) ================= */
-function ganttPanel(){
-  // Recolhe itens com pelo menos uma data; agrupa por projecto
+/* ================= CRONOGRAMA (GANTT) =================
+   opts.mode: 'dashboard' (só projectos, expansível) | 'project' (acções de 1 projecto) | 'full' (ecrã inteiro)
+   opts.projectId: para modo 'project'
+   opts.expanded: Set de ids de projecto expandidos (modo dashboard)
+*/
+let ganttExpanded = new Set();  // projectos expandidos no cronograma do dashboard
+function ganttPanel(opts){
+  opts=opts||{mode:'dashboard'};
+  const mode=opts.mode||'dashboard';
   const parse=d=>{ if(!d) return null; const t=new Date(d+"T00:00:00"); return isNaN(t)?null:t; };
   const today=new Date(todayISO()+"T00:00:00");
-  const rows=[]; // {type:'proj'|'act', label, start, end, status, late, critico, indent}
+  const rows=[];
   let minD=null, maxD=null;
   const consider=(s,e)=>{ if(s){minD=!minD||s<minD?s:minD; maxD=!maxD||s>maxD?s:maxD;} if(e){minD=!minD||e<minD?e:minD; maxD=!maxD||e>maxD?e:maxD;} };
 
-  projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).forEach(p=>{
+  // Que projectos mostrar
+  let projList;
+  if(mode==='project'){ const p=projects.find(x=>x.id===opts.projectId); projList=p?[p]:[]; }
+  else projList=projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99));
+
+  projList.forEach(p=>{
     const as=projActions(p.id);
     const dated=as.filter(a=>a.beginDate||a.deadline);
-    // Barra do projecto = envelope das suas acções (ou nada se sem datas)
     let ps=null,pe=null;
     dated.forEach(a=>{ const s=parse(a.beginDate)||parse(a.deadline), e=parse(a.deadline)||parse(a.beginDate); if(s&&(!ps||s<ps))ps=s; if(e&&(!pe||e>pe))pe=e; });
-    if(ps||pe){ rows.push({type:'proj',label:p.name,start:ps,end:pe,projId:p.id}); consider(ps,pe); }
-    else rows.push({type:'proj',label:p.name,start:null,end:null,projId:p.id,nodate:true});
-    dated.forEach(a=>{
-      const s=parse(a.beginDate)||parse(a.deadline), e=parse(a.deadline)||parse(a.beginDate);
-      rows.push({type:'act',label:a.title,start:s,end:e,status:a.status,late:isLate(a),critico:a.critico,actId:a.id});
-      consider(s,e);
-    });
+
+    if(mode==='project'){
+      // Só as acções (sem a barra-envelope do projecto)
+      dated.forEach(a=>{ const s=parse(a.beginDate)||parse(a.deadline), e=parse(a.deadline)||parse(a.beginDate);
+        rows.push({type:'act',label:a.title,start:s,end:e,status:a.status,late:isLate(a),critico:a.critico,actId:a.id}); consider(s,e); });
+    } else {
+      // Dashboard/full: barra do projecto; acções só se expandido
+      const expanded = ganttExpanded.has(p.id);
+      if(ps||pe){ rows.push({type:'proj',label:p.name,start:ps,end:pe,projId:p.id,expandable:dated.length>0,expanded}); consider(ps,pe); }
+      else rows.push({type:'proj',label:p.name,start:null,end:null,projId:p.id,nodate:true});
+      if(expanded){
+        dated.forEach(a=>{ const s=parse(a.beginDate)||parse(a.deadline), e=parse(a.deadline)||parse(a.beginDate);
+          rows.push({type:'act',label:a.title,start:s,end:e,status:a.status,late:isLate(a),critico:a.critico,actId:a.id}); consider(s,e); });
+      }
+    }
   });
 
-  if(!minD||!maxD){ return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2></div><div class="panel"><div class="empty-state"><p>Sem datas definidas nas acções ainda. Adicione datas de início e prazo às acções para verem o cronograma aqui.</p></div></div></div>`; }
+  const emptyMsg = mode==='project'
+    ? `<div class="empty-state"><p>Sem datas nas acções deste projecto. Adicione início/prazo às acções para ver o cronograma.</p></div>`
+    : `<div class="empty-state"><p>Sem datas definidas nas acções ainda. Adicione datas de início e prazo às acções.</p></div>`;
+  if(!minD||!maxD){
+    if(mode==='project') return `<div class="panel">${emptyMsg}</div>`;
+    return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2></div><div class="panel">${emptyMsg}</div></div>`;
+  }
 
-  // Garante que "hoje" entra na janela e dá margem
   if(today<minD)minD=today; if(today>maxD)maxD=today;
   const pad=Math.max(3, Math.round((maxD-minD)/(1000*60*60*24)*0.05));
   minD=new Date(minD.getTime()-pad*864e5); maxD=new Date(maxD.getTime()+pad*864e5);
   const span=(maxD-minD)||864e5;
   const pct=d=>((d-minD)/span*100);
 
-  // Marcas de mês
   const ticks=[]; let t=new Date(minD.getFullYear(),minD.getMonth(),1);
   while(t<=maxD){ if(t>=minD) ticks.push(new Date(t)); t=new Date(t.getFullYear(),t.getMonth()+1,1); }
   const meses=["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
   const tickHtml=ticks.map(d=>`<div class="g-tick" style="left:${pct(d)}%"><span>${meses[d.getMonth()]} ${String(d.getFullYear()).slice(2)}</span></div>`).join("");
   const todayPct=pct(today);
+  const labW = mode==='full'?260:220;
 
   const barHtml=rows.map(r=>{
     if(r.nodate) return `<div class="g-row"><div class="g-lab proj"><span class="g-dot proj"></span>${esc(r.label)}</div><div class="g-track"><span class="g-nodate">sem datas</span></div></div>`;
@@ -823,42 +882,67 @@ function ganttPanel(){
     let left=pct(s), width=Math.max(0.8, pct(e)-pct(s));
     let cls = r.type==='proj' ? 'proj' : (r.status==='concluido'?'done':r.late?'late':r.critico?'crit':r.status==='bloqueado'?'block':'exec');
     const oneDay = (e-s)<864e5*1.5;
-    const data = r.type==='proj'?`data-open-project="${r.projId}"`:`data-open-action="${r.actId}"`;
     const tip = `${r.label} · ${r.start?fmtD(r.start):'?'}${r.end&&r.end!==r.start?' → '+fmtD(r.end):''}`;
+    // Label: projecto expansível tem seta + botão de saltar para a ficha
+    let labelInner;
+    if(r.type==='proj'){
+      const caret = r.expandable?`<span class="g-caret" data-gantt-toggle="${r.projId}">${r.expanded?'▼':'▶'}</span>`:'<span class="g-caret-spacer"></span>';
+      labelInner=`${caret}<span class="g-projname" data-gantt-toggle="${r.projId}">${esc(r.label)}</span><span class="g-goto" data-goto-projbtn="${r.projId}" title="Abrir ficha do projecto">↗</span>`;
+    } else {
+      labelInner=`<span data-open-action="${r.actId}" style="cursor:pointer">${esc(r.label)}</span>`;
+    }
+    const barData = r.type==='proj'?`data-gantt-toggle="${r.projId}"`:`data-open-action="${r.actId}"`;
     return `<div class="g-row">
-      <div class="g-lab ${r.type}" ${data} style="cursor:pointer" title="${esc(r.label)}">${r.type==='proj'?'<span class="g-dot proj"></span>':''}${esc(r.label)}</div>
+      <div class="g-lab ${r.type}" style="width:${labW}px">${labelInner}</div>
       <div class="g-track">
-        <div class="g-bar ${cls} ${oneDay?'milestone':''}" ${data} style="left:${left}%;width:${width}%" title="${esc(tip)}"></div>
+        <div class="g-bar ${cls} ${oneDay?'milestone':''}" ${barData} style="left:${left}%;width:${width}%" title="${esc(tip)}"></div>
       </div></div>`;
   }).join("");
 
-  return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2><span class="count">${rows.filter(r=>!r.nodate).length} com datas</span>
-      <span style="margin-left:auto;font-size:11px;color:var(--ink-soft);display:flex;gap:12px;flex-wrap:wrap">
-        <span><span class="lg-chip exec"></span>Em execução</span>
-        <span><span class="lg-chip crit"></span>Crítica</span>
-        <span><span class="lg-chip late"></span>Atrasada</span>
-        <span><span class="lg-chip done"></span>Concluída</span>
-        <span><span class="lg-chip today"></span>Hoje</span>
-      </span></div>
-    <div class="panel" style="padding:0;overflow:hidden">
-      <div class="gantt">
-        <div class="g-head"><div class="g-lab-head"></div><div class="g-track-head">${tickHtml}<div class="g-today-line" style="left:${todayPct}%"></div></div></div>
+  const legend = `<span style="font-size:11px;color:var(--ink-soft);display:flex;gap:12px;flex-wrap:wrap">
+        <span><span class="lg-chip exec"></span>Em execução</span><span><span class="lg-chip crit"></span>Crítica</span>
+        <span><span class="lg-chip late"></span>Atrasada</span><span><span class="lg-chip done"></span>Concluída</span>
+        <span><span class="lg-chip today"></span>Hoje</span></span>`;
+  const ganttInner = `<div class="gantt ${mode==='full'?'gantt-full':''}">
+        <div class="g-head"><div class="g-lab-head" style="width:${labW}px"></div><div class="g-track-head">${tickHtml}<div class="g-today-line" style="left:${todayPct}%"></div></div></div>
         <div class="g-body">
-          <div class="g-today-line full" style="left:calc(220px + (100% - 220px) * ${todayPct/100})"></div>
+          <div class="g-today-line full" style="left:calc(${labW}px + (100% - ${labW}px) * ${todayPct/100})"></div>
           ${barHtml}
         </div>
-      </div>
-    </div></div>`;
+      </div>`;
+
+  if(mode==='project'){
+    return `<div class="panel" style="padding:0;overflow:hidden">${ganttInner}</div>`;
+  }
+  if(mode==='full'){
+    return ganttInner;
+  }
+  // dashboard
+  return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2><span class="count">${projList.length} projectos</span>
+      <span style="margin-left:auto;display:flex;gap:12px;align-items:center">${legend}
+      <button class="btn ghost sm" data-act="gantt-full" title="Abrir em página própria">⛶ Ampliar</button></span></div>
+    <div style="font-size:11px;color:var(--ink-soft);margin:-6px 0 8px">Clique num projecto para ver as suas acções. Use ↗ para abrir a ficha.</div>
+    <div class="panel" style="padding:0;overflow:hidden">${ganttInner}</div></div>`;
 }
 function fmtD(d){ return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
+// Página própria do cronograma (ecrã inteiro)
+function renderGanttFull(){
+  return `<div class="page-head"><div>
+      <p style="margin-bottom:4px"><a href="#" data-nav="dashboard" style="color:var(--brand-2);text-decoration:none;font-size:13px">← Dashboard</a></p>
+      <h1>Cronograma — vista ampliada</h1><p>Clique num projecto para expandir as acções</p></div></div>
+    <div class="panel" style="padding:0;overflow:auto">${ganttPanel({mode:'full'})}</div>`;
+}
 
 /* ================= PROJECTS GRID ================= */
 function renderProjects(){
-  const cards = projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99)).map(p=>{
+  const ordered = projects.slice().sort((a,b)=>(a.priority||99)-(b.priority||99));
+  const canReorder = canEdit("projectos");
+  const cards = ordered.map(p=>{
     const as=projActions(p.id), prog=projProgress(p.id);
     const crit=as.filter(a=>a.critico&&a.status!=="concluido").length;
     const late=as.filter(a=>isLate(a)).length;
-    return `<div class="proj-card" data-open-project="${p.id}">
+    return `<div class="proj-card ${reorderMode?'reordering':''}" data-open-project="${p.id}" data-proj-card="${p.id}" ${reorderMode&&canReorder?'draggable="true"':''}>
+      ${reorderMode?'<div class="drag-handle">⠿ arraste para ordenar</div>':''}
       <div class="pc-top"><div><h3>${esc(p.name)}</h3><div class="pc-grp">${esc(p.grupo)}</div></div>
         <span class="prio-chip p${p.priority<=2?p.priority:''}">${p.priority||'–'}</span></div>
       <div class="pc-body">
@@ -869,9 +953,11 @@ function renderProjects(){
       <div class="pc-foot"><span>${crit?`<span class="badge b-crit">${crit} crítica(s)</span>`:'Lead: '+esc(projLeadName(p)||'—')}</span>${late?`<span class="badge b-late">${late} atrasada(s)</span>`:''}</div>
     </div>`;
   }).join("");
-  return `<div class="page-head"><div><h1>Projectos</h1><p>${projects.length} projectos ordenados por prioridade do Grupo</p></div>
-    ${canEdit("projectos")?`<button class="btn primary" data-act="new-project">+ Novo projecto</button>`:''}</div>
-  <div class="proj-grid">${cards||'<div class="empty-state"><h3>Sem projectos</h3><p>Crie o primeiro projecto para começar.</p></div>'}</div>`;
+  return `<div class="page-head"><div><h1>Projectos</h1><p>${projects.length} projectos ${reorderMode?'· arraste os cartões para reordenar':'ordenados por prioridade do Grupo'}</p></div>
+    <div style="display:flex;gap:8px">
+    ${canReorder?`<button class="btn ${reorderMode?'primary':''}" data-act="toggle-reorder">${reorderMode?'✓ Concluir ordenação':'↕ Reordenar'}</button>`:''}
+    ${canReorder&&!reorderMode?`<button class="btn primary" data-act="new-project">+ Novo projecto</button>`:''}</div></div>
+  <div class="proj-grid" id="proj-grid">${cards||'<div class="empty-state"><h3>Sem projectos</h3><p>Crie o primeiro projecto para começar.</p></div>'}</div>`;
 }
 
 /* ================= PROJECT DETAIL + LOG ================= */
@@ -901,6 +987,7 @@ function renderProjectDetail(pid){
       (p.leadId?[{id:p.leadId,lead:true}]:[]).concat(projMemberNames(p).map((_,i)=>({id:p.memberIds[i],lead:false}))).map(m=>{const u=person(m.id);return u?`<span class="team-chip" data-open-person="${u.id}">${avatarHtml(u)}<span>${esc(u.name)}${m.lead?' · Lead':''}</span></span>`:'';}).join("")
     }${p.teamNote?`<span class="team-chip note">${esc(p.teamNote)}</span>`:''}</div></div>`:''}
   ${p.scope||p.notes?`<div class="panel" style="padding:16px;margin-bottom:22px"><div class="t-meta" style="margin-bottom:4px"><b>Âmbito:</b> ${esc(p.scope||'—')}</div>${p.notes?`<div class="t-meta"><b>Notas:</b> ${esc(p.notes)}</div>`:''}</div>`:''}
+  <div class="sec"><div class="sec-head"><h2>Cronograma das acções</h2></div>${ganttPanel({mode:'project',projectId:pid})}</div>
   <div class="sec"><div class="sec-head"><h2>Acções</h2><span class="count">${as.length}</span></div>
     <div class="panel">${as.length?`<table><thead><tr><th style="width:48px">Pri</th><th>Acção</th><th>Responsável</th><th style="width:220px">Estado</th><th>Prazo</th><th></th></tr></thead><tbody>${as.map(aRow).join("")}</tbody></table>`:`<div class="empty-state"><p>Sem acções neste projecto. Adicione a primeira.</p></div>`}</div></div>
   <div class="sec"><div class="sec-head"><h2>Histórico do projecto</h2><span class="count">${log.length}</span></div>
@@ -1148,7 +1235,7 @@ function projectModal(p){
       <div class="t-meta" style="font-size:11px;margin-top:4px">Liga este projecto à ficha de uma empresa do Grupo ou externa. Se escrever um nome que já é empresa, é sugerida automaticamente.</div>
     </div>
     <div class="frow">
-      <div class="field"><label>Grupo / vertical</label><select id="m-grupo">${GRUPOS.map(g=>`<option ${p.grupo===g?'selected':''}>${g}</option>`).join("")}</select></div>
+      <div class="field"><label>Grupo / vertical</label><input id="m-grupo" list="m-vert-list" value="${esc(p.grupo||'')}" placeholder="Escolha ou escreva uma vertical nova"><datalist id="m-vert-list">${allVerticals().map(g=>`<option value="${esc(g)}">`).join("")}</datalist></div>
       <div class="field"><label>Lead (responsável do projecto)</label><select id="m-lead"><option value="">— Sem lead —</option>${activePeople().map(u=>`<option value="${u.id}" ${p.leadId===u.id?'selected':''}>${esc(u.name)}${u.initials?' ('+esc(u.initials)+')':''}</option>`).join("")}</select></div>
     </div>
     <div class="frow">
@@ -1180,6 +1267,8 @@ async function saveProject(id){
   const memberIds=memSel?Array.from(memSel.selectedOptions).map(o=>o.value):[];
   const companyId=document.getElementById("m-company")?document.getElementById("m-company").value:"";
   const data={name,grupo:document.getElementById("m-grupo").value,priority:+v("m-prio")||null,leadId:document.getElementById("m-lead").value,memberIds,teamNote:v("m-teamnote"),scope:v("m-scope"),notes:v("m-notes"),companyId:companyId||null};
+  // Se a vertical é nova, regista-a para aparecer na lista no futuro
+  if(data.grupo && !allVerticals().includes(data.grupo)){ customVerticals.push(data.grupo); saveSettings(); }
   if(id){ const p=projects.find(x=>x.id===id); const changes=diffProject(p,data); Object.assign(p,data);
     pushLog("Projecto · "+name, changes.length?("Editado: "+changes.join("; ")):"Guardado sem alterações.", id);
     toast("Projecto actualizado."); }
@@ -1550,7 +1639,7 @@ function renderCoDetail(id, kind){
       <p style="margin-bottom:4px"><a href="#" data-nav="${back}" style="color:var(--brand-2);text-decoration:none;font-size:13px">← ${isGrp?'Grupo':'Externas'}</a></p>
       <h1 style="font-family:'Fraunces',serif;font-size:25px">${esc(c.name)}</h1>
       <p style="color:var(--ink-soft)">${esc(c.sector||'—')}${!isGrp&&c.relation?' · '+REL_TIPOS[c.relation]:''}</p></div>
-    ${canEdit("empresas")?`<button class="btn" data-edit-co="${c.id}">Editar</button>`:''}</div>
+    ${canEdit("empresas")?`<div style="display:flex;gap:8px"><button class="btn" data-edit-co="${c.id}">Editar</button><button class="btn danger" data-del-co="${c.id}">Apagar</button></div>`:''}</div>
   <div class="detail-meta">
     <div class="dm"><div class="l">NUIT</div><div class="v" style="font-size:14px">${fmt(esc(c.nuit))}</div></div>
     ${isGrp?`<div class="dm"><div class="l">Data de constituição</div><div class="v" style="font-size:14px">${fmt(c.founded)}</div></div>`:`<div class="dm"><div class="l">Relação</div><div class="v" style="font-size:14px">${fmt(REL_TIPOS[c.relation])}</div></div>`}
@@ -1925,6 +2014,8 @@ function bindGlobal(){
     else if(a==="refresh")refreshFromServer();
     else if(a==="logout")doLogout();
     else if(a==="profiles")profilesModal();
+    else if(a==="toggle-reorder"){ reorderMode=!reorderMode; render(); }
+    else if(a==="gantt-full"){ view="gantt"; render(); }
     else if(a==="export-xlsx")exportXlsx();
     else if(a==="export-pdf")exportPdf();
   });
@@ -1934,21 +2025,43 @@ function bindGlobal(){
   document.querySelectorAll("[data-edit-emp]").forEach(el=>el.onclick=e=>{e.stopPropagation();empModal(employees.find(x=>x.id===el.getAttribute("data-edit-emp")));});
   document.querySelectorAll("[data-dl-contract]").forEach(el=>el.onclick=e=>{e.preventDefault();e.stopPropagation();downloadContract(el.getAttribute("data-dl-contract"));});
   document.querySelectorAll("[data-edit-co]").forEach(el=>el.onclick=e=>{e.stopPropagation();coModal(coById(el.getAttribute("data-edit-co")));});
+  document.querySelectorAll("[data-del-co]").forEach(el=>el.onclick=e=>{e.stopPropagation();confirmDeleteCo(el.getAttribute("data-del-co"));});
   document.querySelectorAll("[data-dl-codoc]").forEach(el=>el.onclick=e=>{e.preventDefault();e.stopPropagation();downloadCoDoc(el.getAttribute("data-dl-codoc"));});
   bindRowClicks();
 }
 function bindRowClicks(){
-  document.querySelectorAll("[data-open-project]").forEach(el=>el.onclick=()=>{openProjectId=el.getAttribute("data-open-project");view="projects";render();});
+  document.querySelectorAll("[data-open-project]").forEach(el=>el.onclick=()=>{ if(reorderMode&&el.hasAttribute("data-proj-card")) return; openProjectId=el.getAttribute("data-open-project");view="projects";render();});
+  if(reorderMode) setupDragReorder();
   document.querySelectorAll("[data-open-action]").forEach(el=>el.onclick=()=>{actionModal(actions.find(a=>a.id===el.getAttribute("data-open-action")));});
   document.querySelectorAll("[data-open-person]").forEach(el=>el.onclick=()=>{openPersonId=el.getAttribute("data-open-person");view="people";render();});
   document.querySelectorAll("[data-open-emp]").forEach(el=>el.onclick=()=>{openEmpId=el.getAttribute("data-open-emp");view="rh";render();});
   document.querySelectorAll("[data-open-co]").forEach(el=>el.onclick=()=>{openCoId=el.getAttribute("data-open-co");render();});
   document.querySelectorAll("[data-goto-co]").forEach(el=>el.onclick=async e=>{e.preventDefault();const id=el.getAttribute("data-goto-co");if(!coLoaded)await loadCompanies();const c=coById(id);openProjectId=null;openCoId=id;view=c&&c.kind==="externa"?"externas":"grupo";render();});
   document.querySelectorAll("[data-goto-proj]").forEach(el=>el.onclick=e=>{e.preventDefault();openCoId=null;openProjectId=el.getAttribute("data-goto-proj");view="projects";render();});
+  document.querySelectorAll("[data-gantt-toggle]").forEach(el=>el.onclick=e=>{e.stopPropagation();const id=el.getAttribute("data-gantt-toggle");if(ganttExpanded.has(id))ganttExpanded.delete(id);else ganttExpanded.add(id);render();});
+  document.querySelectorAll("[data-goto-projbtn]").forEach(el=>el.onclick=e=>{e.stopPropagation();e.preventDefault();openProjectId=el.getAttribute("data-goto-projbtn");view="projects";render();});
+}
+// Arrastar cartões de projecto para reordenar; ao largar, regrava as prioridades
+function setupDragReorder(){
+  const grid=document.getElementById("proj-grid"); if(!grid) return;
+  grid.querySelectorAll("[data-proj-card]").forEach(card=>{
+    card.addEventListener("dragstart",e=>{ card.classList.add("dragging"); e.dataTransfer.effectAllowed="move"; });
+    card.addEventListener("dragend",()=>{ card.classList.remove("dragging"); });
+    card.addEventListener("dragover",e=>{ e.preventDefault();
+      const dragging=grid.querySelector(".dragging"); if(!dragging||dragging===card) return;
+      const rect=card.getBoundingClientRect(); const after=(e.clientY-rect.top)>rect.height/2;
+      grid.insertBefore(dragging, after?card.nextSibling:card);
+    });
+    card.addEventListener("drop",e=>{ e.preventDefault();
+      const ids=[...grid.querySelectorAll("[data-proj-card]")].map(c=>c.getAttribute("data-proj-card"));
+      ids.forEach((id,i)=>{ const p=projects.find(x=>x.id===id); if(p) p.priority=i+1; });
+      persist(); toast("Ordem actualizada.");
+    });
+  });
 }
 
 /* ================= BOOT ================= */
-async function boot(){ await loadAll(); loadCompanies().then(()=>render()); render(); }
+async function boot(){ await loadAll(); await loadSettings(); loadCompanies().then(()=>render()); render(); }
 
 async function startApp(){
   // Cria o cliente Supabase
