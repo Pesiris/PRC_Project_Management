@@ -1851,11 +1851,23 @@ function renderProfiles(users){
     </tr>`;
   }).join("");
   b.innerHTML=`
-    <p style="font-size:12px;color:var(--ink-soft);margin-bottom:12px">Defina o acesso de cada conta. <b>Admin</b> vê e edita tudo. <b>Leitura</b> vê tudo sem editar. <b>Perfil por área</b> usa as colunas Projectos / Empresas / RH (Nenhum, Ver, Editar). As permissões por área só se aplicam quando o papel é "Perfil por área".</p>
+    <div style="background:var(--infobg);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--ink)">
+      <b>Para criar uma conta nova:</b> abra o <a href="https://supabase.com/dashboard/project/rmvomyjavbrrlxpwaqgj/auth/users" target="_blank" rel="noopener" style="color:var(--brand-2)">painel de utilizadores do Supabase</a> → botão <b>Add user</b> → <b>Create new user</b> → defina email e palavra-passe (active "Auto Confirm User"). Depois clique <b>Recarregar lista</b> aqui em baixo e atribua o perfil.
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <p style="font-size:12px;color:var(--ink-soft);margin:0;flex:1"><b>Admin</b> vê e edita tudo. <b>Leitura</b> vê tudo sem editar. <b>Perfil por área</b> usa as colunas (Nenhum / Ver / Editar).</p>
+      <button class="btn sm" id="prof-reload">↻ Recarregar lista</button>
+    </div>
     <div class="panel" style="overflow-x:auto"><table class="prof-table"><thead><tr><th>Utilizador</th><th>Papel</th><th>Projectos</th><th>Empresas</th><th>RH</th><th></th></tr></thead>
     <tbody>${rows||'<tr><td colspan="6">Nenhum utilizador.</td></tr>'}</tbody></table></div>
     <div id="prof-msg" class="msg" style="margin-top:10px"></div>`;
   b.querySelectorAll("[data-save-prof]").forEach(btn=>btn.onclick=()=>saveProfile(btn.getAttribute("data-save-prof")));
+  const reload=document.getElementById("prof-reload");
+  if(reload) reload.onclick=async()=>{
+    reload.disabled=true; reload.textContent="A recarregar…";
+    try{ const { data } = await sb.rpc("list_user_profiles"); renderProfiles(data||[]); }
+    catch(e){ reload.disabled=false; reload.textContent="↻ Recarregar lista"; }
+  };
 }
 async function saveProfile(uid){
   const b=document.getElementById("prof-body");
