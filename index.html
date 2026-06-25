@@ -741,7 +741,7 @@ function topbar(){
   // Submenu conforme o grupo activo
   let subbar="";
   if(grp==="g-dash" && canView("projectos")){
-    subbar=`${sub("dashboard","Dashboard")}${sub("projects","Projectos")}${sub("actions","Acções")}${sub("people","Pessoas")}${sub("log","Histórico")}${sub("reports","Reports")}`;
+    subbar=`${sub("dashboard","Dashboard")}${sub("projects","Projectos")}${sub("actions","Acções")}${sub("gantt","Cronograma")}${sub("people","Pessoas")}${sub("log","Histórico")}${sub("reports","Reports")}`;
   } else if(grp==="g-emp" && canView("empresas")){
     subbar=`${sub("grupo","Grupo")}${sub("externas","Externas")}`;
   }
@@ -860,6 +860,7 @@ function ganttPanel(opts){
     : `<div class="empty-state"><p>Sem datas definidas nas acções ainda. Adicione datas de início e prazo às acções.</p></div>`;
   if(!minD||!maxD){
     if(mode==='project') return `<div class="panel">${emptyMsg}</div>`;
+    if(mode==='full') return `<div class="panel" style="padding:24px">${emptyMsg}</div>`;
     return `<div class="sec"><div class="sec-head"><h2>Cronograma</h2></div><div class="panel">${emptyMsg}</div></div>`;
   }
 
@@ -927,9 +928,11 @@ function ganttPanel(opts){
 function fmtD(d){ return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
 // Página própria do cronograma (ecrã inteiro)
 function renderGanttFull(){
+  const anyExpanded = ganttExpanded.size>0;
   return `<div class="page-head"><div>
       <p style="margin-bottom:4px"><a href="#" data-nav="dashboard" style="color:var(--brand-2);text-decoration:none;font-size:13px">← Dashboard</a></p>
-      <h1>Cronograma — vista ampliada</h1><p>Clique num projecto para expandir as acções</p></div></div>
+      <h1>Cronograma — vista ampliada</h1><p>Clique num projecto para expandir as acções, ou use os botões à direita</p></div>
+    <div style="display:flex;gap:8px"><button class="btn sm" data-act="gantt-expand-all">Expandir todos</button><button class="btn sm" data-act="gantt-collapse-all">Recolher todos</button></div></div>
     <div class="panel" style="padding:0;overflow:auto">${ganttPanel({mode:'full'})}</div>`;
 }
 
@@ -2028,6 +2031,8 @@ function bindGlobal(){
     else if(a==="profiles")profilesModal();
     else if(a==="toggle-reorder"){ reorderMode=!reorderMode; render(); }
     else if(a==="gantt-full"){ view="gantt"; render(); }
+    else if(a==="gantt-expand-all"){ projects.forEach(p=>ganttExpanded.add(p.id)); render(); }
+    else if(a==="gantt-collapse-all"){ ganttExpanded.clear(); render(); }
     else if(a==="export-xlsx")exportXlsx();
     else if(a==="export-pdf")exportPdf();
   });
